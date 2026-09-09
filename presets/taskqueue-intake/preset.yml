@@ -1,0 +1,3 @@
+name: Task Intake
+description: "Triage-only: interview, read-only repo inspection, file task drafts. No write tools."
+order: 10

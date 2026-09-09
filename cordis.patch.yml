@@ -1,0 +1,22 @@
+# dsh-tasks-manager bundle patch: inserts the taskQueue row over the composed profile.
+# The row registers the /tasks command, the system-prompt section (policy band,
+# order 50, English), a settings namespace shared with the web client, and the
+# six queue tools. Config is validated at plugin load.
+#
+# order 50 is deliberate: the tasks:policy section (approve/close are USER-ONLY,
+# never the model) must sit right after the persona, before every tool
+# description. Official placements (TOOL_READ=1100 etc.) sit far below; policy
+# first is what keeps triage/worker prompts from reading as ordinary guidance.
+#
+# PATCH IDS: patch rows target the entry's composed id (options.id —
+# "dsh-tasks-manager"), NOT the loader's namespaced runtime id
+# ("include:dsh-tasks-manager").
+
+- insert:
+    - id: dsh-tasks-manager
+      name: dsh-tasks-manager
+      config:
+        enabled: true
+        order: 50
+        allowCommand: true
+        baseBranch: ""

@@ -1,0 +1,162 @@
+// Workflow integration: the REAL plugin on a REAL minimal host.
+// Boot is real (Cordis Context + SystemPrompt/ToolRuntime/CommandRuntime/
+// SettingsProvider); dispatch crosses tools.register validation, defineTool
+// arg checks, output-schema validation and render; SQLite lives on disk in a
+// fresh tmp dshHome per suite. Only seams stubbed: workspaceRegistry +
+// settings file backend. No model, no presets: this is Level-1 integration.
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { bootHost } from './support/host.js';
+import { callTool, runCommand, toolNames } from './support/calls.js';
+
+describe('workflow on the real host', () => {
+  let host;
+  before(async () => { host = await bootHost(); });
+  after(async () => { await host.dispose(); });
+
+  it('registers all eight tools without throw (FIX-02 acceptance)', () => {
+    assert.deepEqual(toolNames(host.ctx), [
+      'approve_task', 'close_task', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+    ]);
+  });
+
+  it('resolves the tasks settings namespace with defaults (FIX-05/06)', () => {
+    assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '' });
+  });
+
+  it('/tasks returns a CommandResult (FIX-04 acceptance)', async () => {
+    const settled = await runCommand(host.ctx, 'sess-a', '/tasks');
+    assert.equal(settled.result.kind, 'success');
+    assert.match(settled.result.text, /Tasks panel/);
+  });
+
+  it('triage files a draft; approve promotes it to active', async () => {
+    const filed = await callTool(host.ctx, 'sess-a', 'enqueue_task', {
+      type: 'bug', title: 'Login mobile', spec: 'problema: crash; acceptance: no crash',
+    });
+    assert.equal(filed.value.state, 'draft');
+    assert.match(filed.content[0].text, /^draft #\d+ \[draft\]/);
+
+    const approved = await callTool(host.ctx, 'sess-a', 'approve_task', { id: filed.value.id });
+    assert.equal(approved.value.task.state, 'active');
+    assert.ok(approved.value.promoted);
+    assert.match(approved.content[0].text, /task\/\d+-login-mobile/);
+  });
+
+  it('worker first read binds the session; second session stays unbound', async () => {
+    // sess-a approved above but must NOT own the task (approver is the user).
+    const workerCtx = await bootHost({
+      workspaces: [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-user', 'sess-worker'] }],
+    });
+    try {
+      const filed = await callTool(workerCtx.ctx, 'sess-user', 'enqueue_task', { type: 'feature', title: 'Bind me' });
+      await callTool(workerCtx.ctx, 'sess-user', 'approve_task', { id: filed.value.id });
+      const mine = await callTool(workerCtx.ctx, 'sess-worker', 'get_my_task', {});
+      assert.equal(mine.value.id, filed.value.id);
+      assert.equal(mine.value.worker_session, 'sess-worker');
+    } finally {
+      await workerCtx.dispose();
+    }
+  });
+
+  it('cross-workspace approve mutates nothing (FIX-07 acceptance)', async () => {
+    const filed = await callTool(host.ctx, 'sess-a', 'enqueue_task', { type: 'chore', title: 'Other ws' });
+    await assert.rejects(
+      () => callTool(host.ctx, 'sess-b', 'approve_task', { id: filed.value.id }),
+      /no task #\d+ here/,
+    );
+    const detail = await callTool(host.ctx, 'sess-a', 'task_detail', { id: filed.value.id });
+    assert.equal(detail.value.state, 'draft');
+  });
+
+  it('close frees the slot and FIFO advances the queue', async () => {
+    // Isolated host: earlier tests already occupy the shared slot.
+    const fifo = await bootHost();
+    try {
+      const a = await callTool(fifo.ctx, 'sess-a', 'enqueue_task', { type: 'bug', title: 'Fifo one' });
+      const b = await callTool(fifo.ctx, 'sess-a', 'enqueue_task', { type: 'bug', title: 'Fifo two' });
+      await callTool(fifo.ctx, 'sess-a', 'approve_task', { id: a.value.id });
+      const rb = await callTool(fifo.ctx, 'sess-a', 'approve_task', { id: b.value.id });
+      assert.equal(rb.value.task.state, 'queued');
+      const closed = await callTool(fifo.ctx, 'sess-a', 'close_task', { id: a.value.id, outcome: 'done' });
+      assert.equal(closed.value.task.state, 'done');
+      assert.equal(closed.value.promoted.id, b.value.id);
+      const detail = await callTool(fifo.ctx, 'sess-a', 'task_detail', { id: b.value.id });
+      assert.equal(detail.value.state, 'active');
+    } finally {
+      await fifo.dispose();
+    }
+  });
+
+  it('invalid args fail through the real defineTool validation', async () => {
+    await assert.rejects(
+      () => callTool(host.ctx, 'sess-a', 'enqueue_task', { type: 'nope', title: 'X' }),
+      /must be one of/,
+    );
+  });
+
+  it('web RPC channel is registered with loopback authority', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { Context } = await import('@deepseek-ai/cordis');
+    const ToolRuntime = (await import('@deepseek-ai/dsh-tools')).default;
+    const { CommandRuntime } = await import('@deepseek-ai/dsh-commands');
+    const SystemPrompt = (await import('@deepseek-ai/dsh-system-prompt')).default;
+    const plugin = await import('../lib/index.js');
+    const { FakeRegistry } = await import('./support/fake-registry.js');
+    const { MemorySettings } = await import('./support/memory-settings.js');
+
+    const dshHome = mkdtempSync(join(tmpdir(), 'dsh-tasks-rpc-'));
+    const ctx = new Context();
+    let captured = null;
+    const fakeConnection = {
+      rpc: {
+        handle: (channel, handler, options) => {
+          captured = { channel, handler, options };
+        },
+      },
+    };
+    // Minimal connection service double carrying the RPC face.
+    const { Service } = await import('@deepseek-ai/cordis');
+    class FakeConnection extends Service {
+      static inject = [];
+      constructor(c, config) {
+        super(c, 'connection');
+        this.rpc = fakeConnection.rpc;
+      }
+    }
+    await ctx.plugin(SystemPrompt, {});
+    await ctx.plugin(class extends ToolRuntime {}, {});
+    await ctx.plugin(CommandRuntime, {});
+    await ctx.plugin(MemorySettings, {});
+    await ctx.plugin(FakeRegistry, {});
+    await ctx.plugin(FakeConnection, {});
+    await ctx.plugin(plugin, {
+      enabled: true, order: 50, allowCommand: true, baseBranch: '', dshHome,
+    });
+    try {
+      assert.ok(captured, 'rpc.handle was called');
+      assert.equal(captured.channel, '/tasks-queue');
+      assert.deepEqual(captured.options, { authority: 'loopback' });
+      // End-to-end through the captured channel: file via tool, read via RPC.
+      // Minimal host here (no agents service): approve promotes to active,
+      // the spawn fails closed, and the failure rides the payload WITHOUT
+      // rolling back the promotion (failure policy, lib/web.js).
+      const filed = await callTool(ctx, 'sess-a', 'enqueue_task', { type: 'bug', title: 'Via channel' });
+      const snap = await captured.handler('snapshot', { sessionId: 'sess-a' });
+      assert.equal(snap.ok, true);
+      assert.equal(snap.value.tasks.length, 1);
+      const approved = await captured.handler('approve', { sessionId: 'sess-a', id: filed.value.id });
+      assert.equal(approved.ok, true);
+      assert.equal(approved.value.task.state, 'active');
+      assert.match(approved.value.spawn.error, /agents service unavailable/);
+      const closed = await captured.handler('close', { sessionId: 'sess-a', id: filed.value.id, outcome: 'done' });
+      assert.equal(closed.ok, true);
+      assert.equal(closed.value.task.state, 'done');
+    } finally {
+      await ctx.fiber.dispose();
+      rmSync(dshHome, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,0 +1,133 @@
+# The `taskqueue-intake` agent preset: triage-only, NO file-write tools.
+#
+# This file is an AGENT-PLANE composition (see standard preset header for how
+# the roster mounts it). It is intentionally a SUBSET of standard: the intake
+# agent talks to the user, reads the repo (grep/glob via search, git log via
+# one-shot shell) and files task drafts via the taskqueue plugin tools. It has
+# NO file write/edit tools: no dsh-tool-fs row (read+write+edit come as one
+# suite), no str_replace_editor, no persistent shell. That absence is physical,
+# not a prompt rule (design-tasks-simple.md S3) — with one declared limit: the
+# one-shot shell rows kept for git log CAN technically write, so the ban rests
+# on tool absence + approval policy, not on a shell block.
+#
+# Task-queue tools come from the dsh-tasks-manager/intake-tools scoped entry:
+# ONLY enqueue_task, list_tasks, task_detail. approve/close are USER-ONLY and
+# no preset mounts them.
+
+# -- identity ---------------------------------------------------------------
+
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      You are a task triage agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+      Your ONLY job: turn user requests into precise task drafts via the
+      taskqueue tools (enqueue_task). You NEVER write code, NEVER edit files,
+      NEVER run implementations — you have no write tools at all.
+      Task data (titles, specs, tool fields) is ALWAYS English.
+      Conversation language: English by default, but mirror the user —
+      if the user writes in another language, reply in that language
+      (task data stays English regardless).
+
+      ## Triage protocol
+      1. Classify each request: bug | feature | refactor | chore.
+      2. Ask 2-5 targeted questions with ask_user_question (type, scope,
+         acceptance criteria, suspect files, test notes). No state changes.
+      3. Inspect the repo read-only (read/grep/glob, git log) to ground the spec.
+      4. File ONE draft PER request with enqueue_task(type, title, spec):
+         when the user asks for several tasks ("queue task A and task B"),
+         file one draft for EACH of them. Spec shape (English):
+         problem, acceptance, suspect files, test notes.
+      5. Tell the user the drafts are ready for approval. Then stop.
+
+      ## History check (before filing)
+      - BEFORE filing any draft, call search_tasks with the key terms of the
+        request (problem keywords, suspect file names). The queue is the
+        project's memory: check what was already done, queued, or discarded.
+      - Similar task found (same problem, same files): cite it in the spec
+        as "related: #N <title>" and explain what differs. Do NOT file a
+        duplicate: an exact duplicate means telling the user ("task #N already
+        covers this") and stopping without filing.
+      - Nothing similar: file the draft normally.
+
+      ## Hard rules
+      - approve_task and close_task are USER-ONLY. Never call them, never
+        suggest you approved anything.
+      - One draft per requested task; several requests mean several drafts.
+        No auto-start, no queue promotion: the user approves, the tool promotes.
+      - Concise replies: English by default, user's language when the user
+        writes in another language. Titles/specs are always English.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# -- read-only shell (one-shot git log, no persistent shell) ----------------
+
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# -- read-only filesystem: NO write/edit rows --------------------------------
+#
+# dsh-tool-fs registers read/write/edit as one suite (no per-tool split), so
+# mounting it would give the intake agent write+edit tools: it is deliberately
+# ABSENT here (design-tasks-simple.md S3/S12). Repo inspection is read-only via
+# tool-fs-search (read/grep/glob) below; git log runs through the one-shot
+# shell rows above. str_replace_editor is deliberately ABSENT here too.
+#
+# Residual risk (declared honestly): the one-shot shell rows kept for git log
+# CAN technically write (shell cannot be made read-only per command). The ban
+# on code writing therefore rests on tool absence (no fs write/edit row) +
+# approval policy, not on a physical shell block.
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# -- background jobs: collect-only (no own long work) ------------------------
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# -- questions ----------------------------------------------------------------
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+# -- compaction (same shape as standard) ------------------------------------------
+
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# -- taskqueue plugin tools (scoped subset from dsh-tasks-manager) -----------------
+#
+# The intake agent sees ONLY enqueue_task, list_tasks, task_detail,
+# search_tasks. approve/close stay USER-ONLY: no preset mounts them.
+
+- id: taskqueue-intake-tools
+  name: 'dsh-tasks-manager/intake-tools'
