@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
 import { enqueue, ensureWorkspace } from '../lib/queue.js';
 import { createWebHandlers, routeWebCall } from '../lib/web.js';
+import { approve } from '../lib/queue.js';
 
 // Mock store: in-memory DB + two-workspace registry. No DSH boot needed.
 function mockStore() {
@@ -128,6 +129,22 @@ describe('web RPC (panel channel)', () => {
     const out = await routeWebCall(handlers, 'close', { sessionId: 'sess-a', id: row.id, outcome: 'done' });
     assert.equal(out.ok, true);
     assert.equal(out.value.task.state, 'done');
+  });
+
+  it('snapshot lists queued rows in approval order', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const blocker = enqueue(h.db, wsA, { type: 'bug', title: 'Blocker', spec: '' });
+    approve(h.db, blocker.id);
+    const one = enqueue(h.db, wsA, { type: 'bug', title: 'One', spec: '' });
+    const two = enqueue(h.db, wsA, { type: 'bug', title: 'Two', spec: '' });
+    approve(h.db, two.id);
+    approve(h.db, one.id);
+    const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    const queued = out.value.tasks.filter((t) => t.state === 'queued');
+    assert.deepEqual(queued.map((t) => t.id), [two.id, one.id]);
+    h.close();
   });
 
   it('unknown endpoint and bad payloads fail closed', async () => {

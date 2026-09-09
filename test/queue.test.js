@@ -40,6 +40,36 @@ describe('queue', () => {
     h.close();
   });
 
+  it('FIFO follows approval order, not insertion order', () => {
+    const { h, ws } = fresh();
+    // A blocker occupies the slot so all three approvals stay queued.
+    const blocker = enqueue(h.db, ws, { type: 'bug', title: 'Blocker' });
+    approve(h.db, blocker.id);
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One' });
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two' });
+    const three = enqueue(h.db, ws, { type: 'bug', title: 'Three' });
+    // Approve in reverse insertion order: #3, then #1, then #2.
+    approve(h.db, three.id);
+    approve(h.db, one.id);
+    approve(h.db, two.id);
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [three.id, one.id, two.id]);
+    // Freeing the slot promotes the first-APPROVED task, not the lowest id.
+    const rc = close(h.db, blocker.id, 'done');
+    assert.equal(rc.promoted.id, three.id);
+    assert.equal(get(h.db, three.id).state, 'active');
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [one.id, two.id]);
+    h.close();
+  });
+
+  it('approve records queued_at on the row', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Stamped' });
+    assert.equal(get(h.db, a.id).queued_at, null);
+    approve(h.db, a.id);
+    assert.ok(typeof get(h.db, a.id).queued_at === 'string', 'queued_at is stamped at approval');
+    h.close();
+  });
+
   it('rejects bad transitions and bad enums', () => {
     const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
     const { h, ws } = fresh();
@@ -203,7 +233,7 @@ describe('per-workspace numbering', () => {
     h.close();
   });
 
-  it('v2 databases migrate to v3 with deterministic seq backfill, ids untouched', async () => {
+  it('v2 databases migrate to v4 with deterministic seq backfill, ids untouched', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -223,10 +253,10 @@ describe('per-workspace numbering', () => {
       raw.exec("INSERT INTO tasks (id, workspace_id, type, title, slug, spec, branch, state, created_at, updated_at) VALUES (1, 1, 'bug', 'A one', 'a-one', '', '', 'done', 't', 't'), (2, 2, 'bug', 'B one', 'b-one', '', '', 'done', 't', 't'), (3, 1, 'bug', 'A two', 'a-two', '', '', 'draft', 't', 't')");
       raw.exec("PRAGMA user_version = 2");
       raw.close();
-      // Reopen through the plugin: the v2->v3 migration runs in place.
+      // Reopen through the plugin: the v2->v3->v4 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 3);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 4);
         const rows = h.db.prepare("SELECT id, workspace_id, seq FROM tasks ORDER BY id ASC").all();
         assert.deepEqual(rows.map((r) => [r.id, r.workspace_id, r.seq]), [[1, 1, 1], [2, 2, 1], [3, 1, 2]]);
         const idx = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_ws_seq'").get();
@@ -242,7 +272,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v1 databases migrate to v3 (column rename + seq backfill)', async () => {
+  it('v1 databases migrate to v4 (column rename + seq backfill + queued_at)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -263,12 +293,50 @@ describe('per-workspace numbering', () => {
       raw.close();
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 3);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 4);
         const row = get(h.db, 1);
         assert.equal(row.type, 'bug');
         assert.equal(row.title, 'Vecchio');
         assert.equal(row.state, 'draft');
         assert.equal(row.seq, 1);
+        assert.equal(row.queued_at, null);
+      } finally {
+        h.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('v3 databases migrate to v4 in place (queued_at added, rows NULL)', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { DatabaseSync } = await import('node:sqlite');
+    const { openDatabase } = await import('../lib/db.js');
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tasks-v3-'));
+    const path = join(dir, 'tasks.db');
+    try {
+      // Faithful v3 layout: SCHEMA_VERSION-3 DDL, no queued_at column.
+      const raw = new DatabaseSync(path);
+      raw.exec("PRAGMA application_id = 2003397999");
+      raw.exec("CREATE TABLE workspaces (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, base_branch TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+      raw.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, slug TEXT NOT NULL, spec TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft', worker_session TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT, close_reason TEXT)");
+      raw.exec("CREATE INDEX idx_tasks_ws_state ON tasks(workspace_id, state)");
+      raw.exec("CREATE UNIQUE INDEX idx_tasks_ws_seq ON tasks(workspace_id, seq)");
+      raw.exec("INSERT INTO workspaces (id, path, base_branch, created_at, updated_at) VALUES (1, 'C:/a', '', 't', 't')");
+      raw.exec("INSERT INTO tasks (id, workspace_id, seq, type, title, slug, spec, branch, state, created_at, updated_at) VALUES (1, 1, 1, 'bug', 'Queued old', 'queued-old', '', '', 'queued', 't', 't')");
+      raw.exec("PRAGMA user_version = 3");
+      raw.close();
+      // Reopen through the plugin: the v3->v4 migration runs in place.
+      const h = openDatabase({ path });
+      try {
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 4);
+        const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
+        assert.ok(cols.some((c) => c.name === 'queued_at'), 'queued_at column exists');
+        const row = get(h.db, 1);
+        assert.equal(row.state, 'queued');
+        assert.equal(row.queued_at, null);
       } finally {
         h.close();
       }
