@@ -16,7 +16,7 @@ Il tool fa una cosa sola, deterministica: **gestisce la coda** (draft/queued/act
 Il tool NON fa, per scelta:
 
 - Niente worktree: il worker lavora nel checkout dell'utente.
-- Niente PR create dal worker o dal plugin, niente merge, niente rilevamento merge, niente stati di PR: chiusura manuale via UI.
+- Niente merge dal worker o dal plugin, niente rilevamento merge, niente stati di PR: chiusura manuale via UI. Il worker apre UNA PR branch -> base via `gh` e ne riporta l'URL; il merge resta umano e fuori dal plugin.
 - Niente controlli git: tree pulito, branch libero, fetch, rebase, push sono disciplina del system prompt, non regole del tool.
 - Niente test enforcement, niente contatore tentativi, niente log conservati: se i test falliscono, è l'umano a capirlo e chiudere come vuole.
 - Niente scheduler, slot, priorità: solo FIFO banale (il queued più vecchio avanza).
@@ -25,7 +25,7 @@ Il tool NON fa, per scelta:
 
 | Ruolo | Chi | Può scrivere codice? | Tool |
 |---|---|---|---|
-| **Triage/Intake** | agente con cui parli | **NO file-write**: preset senza `dsh-tool-fs`/editor (lettura via search grep/glob, git log via shell one-shot); limite dichiarato: la shell one-shot può tecnicamente scrivere, quindi il divieto è assenza tool + approval, non blocco fisico | `enqueue_task`, `list_tasks`, `task_detail` + lettura |
+| **Triage/Intake** | agente con cui parli | **NO file-write**: preset senza `dsh-tool-fs`/editor (lettura via search grep/glob, git log via shell one-shot); limite dichiarato: la shell one-shot può tecnicamente scrivere, quindi il divieto è assenza tool + approval, non blocco fisico | `enqueue_task`, `list_tasks`, `task_detail` + lettura | **Analista**: capisce la natura della chat (risposta diretta vs task), indaga la root cause read-only, scrive spec eseguibili. Il worker riceve conclusioni, mai lavoro di analisi. |
 | **Worker** | un agente per task, nella sua chat | SÌ, nel checkout del repo | dev standard + `get_my_task` (sola lettura) |
 
 Regola rigida: se il triage può scrivere, prima o poi scriverà. Per questo non è una regola nel prompt, è assenza fisica dei tool di scrittura file (nota onesta: la shell one-shot tenuta per git log resta tecnicamente capace di scrivere).
@@ -68,7 +68,7 @@ Il tool non lo scrive, non lo cambia, non gli importa se l'agente ha finito o no
 
 ## 7. Liturgia worker (system prompt, NON tool)
 
-All'avvio, nel checkout utente: fetch di `origin/<base>`; `checkout -b task/<id>-<slug> origin/<base>`; lavora con commit checkpoint liberi; lancia la suite se esiste (se non esiste, dillo e basta, senza inventare test); `push -u origin` del suo branch; dice "pronto, guarda il branch X". Poi tace.
+All'avvio, nel checkout utente: fetch di `origin/<base>`; `checkout -b task/<id>-<slug> origin/<base>`; lavora con commit checkpoint liberi; lancia la suite se esiste (se non esiste, dillo e basta, senza inventare test); `push -u origin` del suo branch; apre UNA PR branch -> base via `gh pr create` e ne riporta l'URL ("pronto: <URL>"). Poi tace.
 
 - Branch suo: `push --force-with-lease` ammesso dopo rebase. Mai touch al base: niente checkout del base dopo avvio, niente merge, niente push sul base.
 - Base avanzato mentre lavora: rebase + re-test + force-with-lease; se fallisce → lo dice in chat (→ `need_attention`), il tool non fa niente.
@@ -86,7 +86,7 @@ Disciplina del prompt, non del tool: suite presente → deve passare prima di di
 
 ## 10. Le chat: come si vivono
 
-- **Triage:** chiacchiera → triage (skill task-intake-bug/feature/refactor/chore, router nel prompt) → 2-5 domande (`ask_user_question` nativo, senza cambio stato) → `enqueue_task` → approvazione utente → `queued` (poi `active` quando la coda avanza).
+- **Triage:** chiacchiera → capisci la natura della richiesta (risposta diretta vs modifica codice) → analisi read-only approfondita (root cause, punto di inserimento) → 2-5 domande SOLO se ambiguo (`ask_user_question` nativo, senza cambio stato) → `enqueue_task` con spec eseguibile (problema, causa, modifica esatta, acceptance, file, test) → approvazione utente → `queued` (poi `active` quando la coda avanza). Mai delegare l'analisi al worker: lo spec contiene conclusioni, non domande.
 - **Worker:** una chat per task, background default, nessuna auto-apertura (solo notifica). A pronto dice "guarda il branch X" e tace. Review = conversazione normale, riprova sullo stesso branch e pusha.
 - **Bloccato = `ask_user_question` nativo + notifica** (pannello + chat). Il pannello mostra `need_attention` derivato, la coda non si muove.
 
@@ -113,8 +113,8 @@ Backend autoritativo sulla sola coda, fiducia nel worker per tutto il resto (qua
 
 ## 14. Esempio end-to-end
 
-1. Chat: il login scazza su mobile → triage bug, 3 domande → draft. 2. Approvi → queued → active quando lo slot è libero → worker chat in background. 3. Worker: branch task/12-login-mobile, fix, test verdi, push. "Pronto, guarda il branch". 4. Togli quel log → pusha di nuovo. 5. Mergi su GitHub come sempre. Chiudi task (done) → la coda avanza.
+1. Chat: il login scazza su mobile → triage bug, 3 domande → draft. 2. Approvi → queued → active quando lo slot è libero → worker chat in background. 3. Worker: branch task/12-login-mobile, fix, test verdi, push, apre la PR via `gh` e riporta "pronto: <URL PR>". 4. Togli quel log → pusha di nuovo (la stessa PR si aggiorna da sola). 5. Mergi su GitHub come sempre. Chiudi task (done) → la coda avanza.
 
 ## 15. Registro decisioni
 
-1. Versione stupida sincrona: un attivo per repo, niente worktree/scheduler/PR dal plugin (2026-09-07). 2. Triage divieto tecnico, lettura sì. approve/close solo utente. 3. Tool = sola coda deterministica: approve → sempre queued, promozione FIFO automatica; niente controlli git/test nel tool (2026-09-07). 4. Terminali done/cancelled/failed equivalenti per il tool, scelta umana. 5. Niente contatore tentativi nel tool. 6. working/need_attention derivati da DSH, non gestiti dal tool; ask_user_question nativo. 7. Worker nel checkout: branch suo, mai touch al base, force-with-lease solo sul suo. 8. Chiusura manuale; branch mai cancellati alla chiusura. 9. Draft eterni; niente auto-avvio. 10. GitHub-only; base da origin/HEAD + override; sqlite WAL. 11. design-task-queue.md = visione v2 rimandata.
+1. Versione stupida sincrona: un attivo per repo, niente worktree/scheduler/PR dal plugin (2026-09-07). 2. Triage divieto tecnico, lettura sì. approve/close solo utente. 3. Tool = sola coda deterministica: approve → sempre queued, promozione FIFO automatica; niente controlli git/test nel tool (2026-09-07). 4. Terminali done/cancelled/failed equivalenti per il tool, scelta umana. 5. Niente contatore tentativi nel tool. 6. working/need_attention derivati da DSH, non gestiti dal tool; ask_user_question nativo. 7. Worker nel checkout: branch suo, mai touch al base, force-with-lease solo sul suo; apre UNA PR via `gh` e ne riporta l'URL, mai merge proprio, mai seconda PR per le review (push sullo stesso branch). 8. Chiusura manuale; branch mai cancellati alla chiusura. 9. Draft eterni; niente auto-avvio. 10. GitHub-only; base da origin/HEAD + override; sqlite WAL. 11. design-task-queue.md = visione v2 rimandata.

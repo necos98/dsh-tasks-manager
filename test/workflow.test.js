@@ -14,14 +14,28 @@ describe('workflow on the real host', () => {
   before(async () => { host = await bootHost(); });
   after(async () => { await host.dispose(); });
 
-  it('registers all eight tools without throw (FIX-02 acceptance)', () => {
+  it('manual mode hides finish_task by default (workerCanFinish:false)', () => {
+    assert.deepEqual(toolNames(host.ctx), [
+      'approve_task', 'close_task', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+    ]);
+  });
+
+  it('flipping workerCanFinish mounts/unmounts finish_task live', async () => {
+    // Production path: an external settings edit re-resolves + emits
+    // settings/updated, and the gate resyncs (publish = provider push).
+    const settings = host.ctx.get('settings');
+    settings.publish({ tasks: { workerCanFinish: true } });
     assert.deepEqual(toolNames(host.ctx), [
       'approve_task', 'close_task', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+    ]);
+    settings.publish({ tasks: { workerCanFinish: false } });
+    assert.deepEqual(toolNames(host.ctx), [
+      'approve_task', 'close_task', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
     ]);
   });
 
   it('resolves the tasks settings namespace with defaults (FIX-05/06)', () => {
-    assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '' });
+    assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false });
   });
 
   it('/tasks returns a CommandResult (FIX-04 acceptance)', async () => {
@@ -106,6 +120,47 @@ describe('workflow on the real host', () => {
       assert.equal(detail.value.state, 'active');
     } finally {
       await fifo.dispose();
+    }
+  });
+
+  it('manual mode: finish_task is not visible on the real host', async () => {
+    const rt = await bootHost({
+      workspaces: [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-user', 'sess-worker'] }],
+    });
+    try {
+      await assert.rejects(
+        () => callTool(rt.ctx, 'sess-worker', 'finish_task', { outcome: 'done' }),
+        /not visible/,
+      );
+    } finally {
+      await rt.dispose();
+    }
+  });
+
+  it('worker finish on the real host promotes and spawns (no limbo)', async () => {
+    // The reported bug: task 2 goes active on finish_task but no chat opens.
+    // On the real host the spawn fails closed (no agents service), so the
+    // promotion stands WITH the error attached — never a silent limbo.
+    // Needs workerCanFinish:true (default is manual).
+    const rt = await bootHost({
+      workspaces: [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-user', 'sess-worker'] }],
+    });
+    try {
+      rt.ctx.get('settings').publish({ tasks: { workerCanFinish: true } });
+      const a = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Rt one' });
+      const b = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Rt two' });
+      await callTool(rt.ctx, 'sess-user', 'approve_task', { id: a.value.id });
+      await callTool(rt.ctx, 'sess-user', 'approve_task', { id: b.value.id });
+      await callTool(rt.ctx, 'sess-worker', 'get_my_task', {});
+      const done = await callTool(rt.ctx, 'sess-worker', 'finish_task', { outcome: 'done' });
+      assert.equal(done.value.task.state, 'done');
+      assert.equal(done.value.promoted.id, b.value.id);
+      assert.match(done.value.spawn.error, /agents service unavailable/);
+      assert.match(done.content[0].text, /worker spawn failed/);
+      const detail = await callTool(rt.ctx, 'sess-user', 'task_detail', { id: b.value.id });
+      assert.equal(detail.value.state, 'active');
+    } finally {
+      await rt.dispose();
     }
   });
 
