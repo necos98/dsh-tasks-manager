@@ -121,7 +121,7 @@ describe('presets-sync', () => {
   it('syncPresets:false boot leaves the user root alone', async () => {
     const host = await bootHost({ config: { syncPresets: false } });
     try {
-      assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false });
+      assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '' });
       let entries = [];
       try {
         entries = readdirSync(join(host.dshHome, USER_PRESET_DIR));

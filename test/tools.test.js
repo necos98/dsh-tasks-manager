@@ -369,7 +369,7 @@ describe('tool execute (structured values + render)', () => {
   });
 
   it('finish gate unit: mounts/unmounts on sync', async () => {
-    const { createFinishGate, workerCanFinishOf, workerCanMergeOf } = await import('../lib/finish-toggle.js');
+    const { createFinishGate, workerCanFinishOf, workerCanMergeOf, workerRulesOf } = await import('../lib/finish-toggle.js');
     assert.equal(workerCanFinishOf(undefined), false);
     assert.equal(workerCanFinishOf({}), false);
     assert.equal(workerCanFinishOf({ workerCanFinish: true }), true);
@@ -377,6 +377,10 @@ describe('tool execute (structured values + render)', () => {
     assert.equal(workerCanMergeOf({}), false);
     assert.equal(workerCanMergeOf({ workerCanMerge: true }), true);
     assert.equal(workerCanMergeOf({ workerCanMerge: 'yes' }), false);
+    assert.equal(workerRulesOf(undefined), '');
+    assert.equal(workerRulesOf({}), '');
+    assert.equal(workerRulesOf({ workerRules: 42 }), '');
+    assert.equal(workerRulesOf({ workerRules: 'alla fine del lavoro aggiorna la wiki' }), 'alla fine del lavoro aggiorna la wiki');
     const mounted = [];
     let disposed = 0;
     const fakeDefs = [{ name: 'get_my_task' }, { name: 'finish_task' }];

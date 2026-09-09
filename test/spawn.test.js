@@ -65,12 +65,47 @@ describe('spawn identified prompt', () => {
   });
 
   it('modesOfCtx reads the toggles, safe on missing pieces', () => {
-    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerCanMerge: false });
-    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerCanMerge: false });
+    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerCanMerge: false, workerRules: '' });
+    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerCanMerge: false, workerRules: '' });
     assert.deepEqual(
       modesOfCtx({ get: (k) => k === 'settings' ? { get: () => ({ workerCanMerge: true }) } : undefined }),
-      { workerCanFinish: false, workerCanMerge: true },
+      { workerCanFinish: false, workerCanMerge: true, workerRules: '' },
     );
+  });
+
+  it('modesOfCtx reads workerRules verbatim, safe on missing/non-string', () => {
+    assert.equal(
+      modesOfCtx({ get: (k) => k === 'settings' ? { get: () => ({ workerRules: 'alla fine del lavoro aggiorna la wiki' }) } : undefined }).workerRules,
+      'alla fine del lavoro aggiorna la wiki',
+    );
+    assert.equal(
+      modesOfCtx({ get: (k) => k === 'settings' ? { get: () => ({ workerRules: 42 }) } : undefined }).workerRules,
+      '',
+    );
+    assert.equal(modesOfCtx(undefined).workerRules, '');
+  });
+
+  it('workerPrompt appends user rules verbatim under a labelled section', () => {
+    const text = workerPrompt(
+      { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' },
+      { workerCanMerge: false, workerCanFinish: false, workerRules: 'alla fine del lavoro aggiorna la wiki' },
+    );
+    assert.match(text, /Additional user-defined rules \(follow them, they do not override the queue modes above\):/);
+    assert.match(text, /alla fine del lavoro aggiorna la wiki/);
+    // Section order: AFTER the mode lines, BEFORE the startup liturgy.
+    const rulesAt = text.indexOf('Additional user-defined rules');
+    assert.ok(rulesAt > text.indexOf('self-finish is OFF'));
+    assert.ok(rulesAt < text.indexOf('startup liturgy'));
+  });
+
+  it('workerPrompt has no rules section when empty/undefined', () => {
+    const task = { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' };
+    const without = workerPrompt(task);
+    const empty = workerPrompt(task, { workerCanMerge: false, workerCanFinish: false, workerRules: '' });
+    const blank = workerPrompt(task, { workerCanMerge: false, workerCanFinish: false, workerRules: '   ' });
+    assert.equal(empty, without);
+    assert.equal(blank, without);
+    assert.doesNotMatch(without, /Additional user-defined rules/);
   });
 
   it('spawnWorker tells the worker its modes in the first prompt', async () => {
@@ -99,6 +134,35 @@ describe('spawn identified prompt', () => {
     const text = captured.followup.content.map((b) => b.text).join('\n');
     assert.match(text, /auto-merge is ON/);
     assert.match(text, /self-finish is OFF/);
+    h.close();
+  });
+
+  it('spawnWorker first message contains the user rules verbatim', async () => {
+    const h = openMemory();
+    const ws = ensureWorkspace(h.db, 'C:/repo-a');
+    const row = enqueue(h.db, ws, { type: 'bug', title: 'Rules', spec: '' });
+    h.db.prepare('UPDATE tasks SET state = ? WHERE id = ?').run('active', row.id);
+    const captured = {};
+    const ctx = {
+      get(key) {
+        if (key === 'agents') {
+          return {
+            create: async ({ sessionId }) => ({
+              agent: {
+                session: { id: sessionId },
+                followup: (msg) => { captured.followup = msg; },
+              },
+            }),
+          };
+        }
+        if (key === 'settings') return { get: () => ({ workerRules: 'alla fine del lavoro aggiorna la wiki' }) };
+        return undefined;
+      },
+    };
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task: get(h.db, row.id) });
+    const text = captured.followup.content.map((b) => b.text).join('\n');
+    assert.match(text, /Additional user-defined rules/);
+    assert.match(text, /alla fine del lavoro aggiorna la wiki/);
     h.close();
   });
 
