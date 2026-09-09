@@ -76,6 +76,57 @@ describe('tool execute (structured values + render)', () => {
     assert.match(c.text, /^draft #\d+ \[draft\]/);
   });
 
+  it('tool text shows the per-workspace number, not the global id', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const t = byName(defs, 'enqueue_task');
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other workspace first' }); // global id 1
+    const v = await t.execute({ type: 'bug', title: 'Mine', spec: '' }, execA); // global id 2, seq 1
+    assert.equal(v.id, 2);
+    assert.equal(v.seq, 1);
+    const [c] = t.output.render({ type: 'bug', title: 'Mine' }, v);
+    assert.match(c.text, /^draft #1 \[draft\]/);
+    assert.doesNotMatch(c.text, /#2/);
+    const [l] = byName(defs, 'list_tasks').output.render({}, [v]);
+    assert.match(l.text, /^#1 \[draft\]/);
+    h.close();
+  });
+
+  it('approve/close/task_detail accept the visible seq as well as the id', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other workspace first' }); // global id 1
+    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine' }, execA); // id 2, seq 1
+    // Approve by visible seq (what the panel shows as #1).
+    const r = await byName(defs, 'approve_task').execute({ id: 1 }, execA);
+    assert.equal(r.task.id, v.id);
+    assert.equal(r.task.state, 'active');
+    assert.match(r.task.branch, /^task\/1-mine/);
+    // task_detail by visible seq.
+    const detail = await byName(defs, 'task_detail').execute({ id: 1 }, execA);
+    assert.equal(detail.id, v.id);
+    // Close by global id still works (back-compat).
+    const closed = await byName(defs, 'close_task').execute({ id: v.id, outcome: 'done' }, execA);
+    assert.equal(closed.task.state, 'done');
+    h.close();
+  });
+
+  it('cross-workspace numbers (id or seq) mutate nothing', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'B first' }); // global id 1, seq 1 in B
+    const a1 = enqueue(h.db, wsA, { type: 'bug', title: 'A first' }); // global id 2, seq 1 in A
+    const a2 = enqueue(h.db, wsA, { type: 'bug', title: 'A second' }); // global id 3, seq 2 in A
+    const approveTool = byName(defs, 'approve_task');
+    // 2 and 3 are A's global ids / seqs of A rows: invisible from B.
+    await assert.rejects(() => approveTool.execute({ id: 2 }, execB), /no task #2 here/);
+    await assert.rejects(() => approveTool.execute({ id: 3 }, execB), /no task #3 here/);
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, a1.id).state, 'draft');
+    assert.equal(get(h.db, a2.id).state, 'draft');
+    h.close();
+  });
+
   it('list_tasks joins rows with newline, empty reads no tasks (FIX-03)', async () => {
     const { store, wsA } = mockStore();
     const defs = makeToolDefinitions(store);
@@ -197,8 +248,8 @@ describe('queue ownership + clash (FIX-07/FIX-12)', () => {
     approve(h.db, a.id);
     close(h.db, a.id, 'done');
     const b = enqueue(h.db, wsA, { type: 'bug', title: 'Same name' });
-    // Force the residual: pretend branch task/<b.id>-same-name is taken by history.
-    h.db.prepare("UPDATE tasks SET branch = ?, state = ? WHERE id = ?").run('task/' + b.id + '-same-name', 'done', a.id);
+    // Force the residual: pretend branch task/<b.seq>-same-name is taken by history.
+    h.db.prepare("UPDATE tasks SET branch = ?, state = ? WHERE id = ?").run('task/' + b.seq + '-same-name', 'done', a.id);
     const r = approve(h.db, b.id);
     assert.ok(r.promoted.branch.endsWith('-2'), 'expected -2 suffix, got ' + r.promoted.branch);
     h.close();

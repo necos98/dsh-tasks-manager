@@ -54,6 +54,23 @@ describe('web RPC (panel channel)', () => {
     assert.ok(out.value.promoted);
   });
 
+  it('snapshot rows carry the per-workspace seq; approve accepts it', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const handlers = createWebHandlers(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other first', spec: '' }); // global id 1
+    const row = enqueue(h.db, wsA, { type: 'bug', title: 'Panel UI', spec: '' }); // global id 2, seq 1
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap.ok, true);
+    assert.equal(snap.value.tasks.length, 1);
+    assert.equal(snap.value.tasks[0].seq, 1);
+    // Approve by the visible #1 (not the global id 2).
+    const out = await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: 1 });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, row.id);
+    assert.equal(out.value.task.state, 'active');
+    h.close();
+  });
+
   it('cross-workspace approve mutates nothing', async () => {
     const { store } = mockStore();
     const handlers = createWebHandlers(store);

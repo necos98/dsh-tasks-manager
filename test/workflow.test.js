@@ -69,6 +69,27 @@ describe('workflow on the real host', () => {
     assert.equal(detail.value.state, 'draft');
   });
 
+  it('both workspaces number their first task #1 (per-workspace sequence)', async () => {
+    const iso = await bootHost();
+    try {
+      const a = await callTool(iso.ctx, 'sess-a', 'enqueue_task', { type: 'bug', title: 'First in A' });
+      const b = await callTool(iso.ctx, 'sess-b', 'enqueue_task', { type: 'bug', title: 'First in B' });
+      const c = await callTool(iso.ctx, 'sess-a', 'enqueue_task', { type: 'bug', title: 'Second in A' });
+      assert.equal(a.value.seq, 1);
+      assert.equal(b.value.seq, 1);
+      assert.equal(c.value.seq, 2);
+      assert.match(a.content[0].text, /^draft #1 \[draft\]/);
+      assert.match(b.content[0].text, /^draft #1 \[draft\]/);
+      assert.match(c.content[0].text, /^draft #2 \[draft\]/);
+      // Approve by visible seq through the real pipeline; branches use seq too.
+      const approved = await callTool(iso.ctx, 'sess-a', 'approve_task', { id: 2 });
+      assert.equal(approved.value.task.id, c.value.id);
+      assert.equal(approved.value.task.branch, 'task/2-second-in-a');
+    } finally {
+      await iso.dispose();
+    }
+  });
+
   it('close frees the slot and FIFO advances the queue', async () => {
     // Isolated host: earlier tests already occupy the shared slot.
     const fifo = await bootHost();

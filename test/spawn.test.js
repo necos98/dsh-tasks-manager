@@ -39,6 +39,13 @@ describe('spawn identified prompt', () => {
     assert.match(text, /task\/7-fix-login/);
   });
 
+  it('workerPrompt uses the visible seq when the row carries one', () => {
+    const text = workerPrompt({ id: 9, seq: 2, title: 'Fix login', branch: 'task/2-fix-login', slug: 'fix-login' });
+    assert.match(text, /task #2/);
+    assert.match(text, /task\/2-fix-login/);
+    assert.doesNotMatch(text, /#9/);
+  });
+
   it('followup message always carries a non-empty id', async () => {
     const h = openMemory();
     const ws = ensureWorkspace(h.db, 'C:/repo-a');

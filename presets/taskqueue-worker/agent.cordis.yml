@@ -2,7 +2,7 @@
 #
 # This file is an AGENT-PLANE composition (see standard preset header for how
 # the roster mounts it). One chat per task, background by default. The worker
-# owns its branch (task/<id>-<slug>), commits freely, runs the suite when one
+# owns its branch (task/<seq>-<slug>, per-workspace visible number), commits freely, runs the suite when one
 # exists, pushes, then says "ready, look at branch X" and goes quiet
 # (design-tasks-simple.md S7). Review is plain conversation on the same branch.
 #

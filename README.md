@@ -10,7 +10,7 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   (`taskqueue-worker` preset, English prompt) bound via `worker_session`.
   `close_task(id, outcome)` with `done|cancelled|failed` frees the slot.
 - The worker reads its task with `get_my_task` (spawn already binds the
-  session), works on `task/<id>-<slug>` in the user checkout, pushes, reports ready.
+  session), works on `task/<seq>-<slug>` (per-workspace visible number) in the user checkout, pushes, reports ready.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
 - Everything is English: tool fields (`type/title/state/outcome`), presets,
   panel, prompts, and specs.
