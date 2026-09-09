@@ -76,6 +76,57 @@ describe('tool execute (structured values + render)', () => {
     assert.match(c.text, /^draft #\d+ \[draft\]/);
   });
 
+  it('tool text shows the per-workspace number, not the global id', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const t = byName(defs, 'enqueue_task');
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other workspace first' }); // global id 1
+    const v = await t.execute({ type: 'bug', title: 'Mine', spec: '' }, execA); // global id 2, seq 1
+    assert.equal(v.id, 2);
+    assert.equal(v.seq, 1);
+    const [c] = t.output.render({ type: 'bug', title: 'Mine' }, v);
+    assert.match(c.text, /^draft #1 \[draft\]/);
+    assert.doesNotMatch(c.text, /#2/);
+    const [l] = byName(defs, 'list_tasks').output.render({}, [v]);
+    assert.match(l.text, /^#1 \[draft\]/);
+    h.close();
+  });
+
+  it('approve/close/task_detail accept the visible seq as well as the id', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other workspace first' }); // global id 1
+    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine' }, execA); // id 2, seq 1
+    // Approve by visible seq (what the panel shows as #1).
+    const r = await byName(defs, 'approve_task').execute({ id: 1 }, execA);
+    assert.equal(r.task.id, v.id);
+    assert.equal(r.task.state, 'active');
+    assert.match(r.task.branch, /^task\/1-mine/);
+    // task_detail by visible seq.
+    const detail = await byName(defs, 'task_detail').execute({ id: 1 }, execA);
+    assert.equal(detail.id, v.id);
+    // Close by global id still works (back-compat).
+    const closed = await byName(defs, 'close_task').execute({ id: v.id, outcome: 'done' }, execA);
+    assert.equal(closed.task.state, 'done');
+    h.close();
+  });
+
+  it('cross-workspace numbers (id or seq) mutate nothing', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'B first' }); // global id 1, seq 1 in B
+    const a1 = enqueue(h.db, wsA, { type: 'bug', title: 'A first' }); // global id 2, seq 1 in A
+    const a2 = enqueue(h.db, wsA, { type: 'bug', title: 'A second' }); // global id 3, seq 2 in A
+    const approveTool = byName(defs, 'approve_task');
+    // 2 and 3 are A's global ids / seqs of A rows: invisible from B.
+    await assert.rejects(() => approveTool.execute({ id: 2 }, execB), /no task #2 here/);
+    await assert.rejects(() => approveTool.execute({ id: 3 }, execB), /no task #3 here/);
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, a1.id).state, 'draft');
+    assert.equal(get(h.db, a2.id).state, 'draft');
+    h.close();
+  });
+
   it('list_tasks joins rows with newline, empty reads no tasks (FIX-03)', async () => {
     const { store, wsA } = mockStore();
     const defs = makeToolDefinitions(store);
@@ -166,6 +217,214 @@ describe('tool execute (structured values + render)', () => {
     h.close();
   });
 
+  it('finish_task promotion spawns the next worker (no limbo)', async () => {
+    const { h, store, wsA } = mockStore();
+    // Host-style hook: what lib/index.js injects as runtime.spawnHooks.
+    const calls = [];
+    // Test double binds the worker identity the test actually drives
+    // (production spawnWorker binds the fresh session the same way).
+    store.spawnHooks = {
+      spawnForPromotion: async ({ db, workspace, promoted }) => {
+        calls.push({ promoted, workspace });
+        const { bindSession } = await import('../lib/queue.js');
+        bindSession(db, promoted.id, 'sess-worker');
+        return { sessionId: 'sess-worker' };
+      },
+    };
+    const defs = makeToolDefinitions(store);
+    store.workspaceRegistry.list = () => [
+      { id: 'a', path: 'C:/repo-a', sessionIds: ['sess-a', 'sess-worker', 'sess-worker-2'] },
+      { id: 'b', path: 'C:/repo-b', sessionIds: ['sess-b'] },
+    ];
+    const execW = { agent: { session: { header: { id: 'sess-worker' } } } };
+    const one = enqueue(h.db, wsA, { type: 'bug', title: 'First' });
+    const two = enqueue(h.db, wsA, { type: 'bug', title: 'Second' });
+    await byName(defs, 'approve_task').execute({ id: one.id }, execA);
+    await byName(defs, 'approve_task').execute({ id: two.id }, execA);
+    assert.equal(calls.length, 1, 'approve of #1 spawns its worker');
+    // Approve already bound sess-worker via the spawn (no lazy read needed);
+    // the bound read just returns the owned task.
+    const mine = await byName(defs, 'get_my_task').execute({}, execW);
+    assert.equal(mine.id, one.id);
+    const done = await byName(defs, 'finish_task').execute({ outcome: 'done' }, execW);
+    assert.equal(done.task.state, 'done');
+    assert.ok(done.promoted, 'second task promoted');
+    assert.equal(done.promoted.id, two.id);
+    assert.equal(calls.length, 2, 'finish spawns the promoted worker');
+    assert.equal(calls[1].promoted.id, two.id);
+    assert.deepEqual(done.spawn, { sessionId: 'sess-worker' });
+    const [c] = byName(defs, 'finish_task').output.render({ outcome: 'done' }, done);
+    assert.match(c.text, /worker sess-worker/);
+    // The promoted task is bound: no limbo, a chat owns it.
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, two.id).worker_session, 'sess-worker');
+    h.close();
+  });
+
+  it('without a spawn hook the queue stays pure (no spawn field)', async () => {
+    const { h, store, wsA } = mockStore();
+    const defs = makeToolDefinitions(store);
+    store.workspaceRegistry.list = () => [
+      { id: 'a', path: 'C:/repo-a', sessionIds: ['sess-a', 'sess-worker'] },
+      { id: 'b', path: 'C:/repo-b', sessionIds: ['sess-b'] },
+    ];
+    const execW = { agent: { session: { header: { id: 'sess-worker' } } } };
+    const one = enqueue(h.db, wsA, { type: 'bug', title: 'First' });
+    const two = enqueue(h.db, wsA, { type: 'bug', title: 'Second' });
+    await byName(defs, 'approve_task').execute({ id: one.id }, execA);
+    await byName(defs, 'approve_task').execute({ id: two.id }, execA);
+    await byName(defs, 'get_my_task').execute({}, execW);
+    const done = await byName(defs, 'finish_task').execute({ outcome: 'done' }, execW);
+    assert.equal(done.task.state, 'done');
+    assert.ok(done.promoted, 'promotion still happens without a hook');
+    assert.equal(done.spawn, undefined);
+    h.close();
+  });
+
+  it('scoped worker entry (preset path) spawns on finish promotion', async () => {
+    // The production worker resolves finish_task to the SCOPED registration
+    // (preset mounts dsh-tasks-manager/worker-tools, not the host entry),
+    // so the hook must live there too — otherwise the promoted task limbos.
+    // The scoped runtime owns its DB file (config dshHome); the test opens
+    // the SAME file directly to file fixtures, then drives the scoped defs.
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { applyScopedTools, WORKER_TOOLS } = await import('../lib/scoped.js');
+    const { openDatabase } = await import('../lib/db.js');
+    const { dbFilePath } = await import('../lib/paths.js');
+    const { enqueue: qEnqueue, ensureWorkspace: qEnsure, approve: qApprove, bindSession: qBind, get: qGet } = await import('../lib/queue.js');
+    const dshHome = mkdtempSync(join(tmpdir(), 'dsh-tasks-scoped-'));
+    const registered = [];
+    const disposers = [];
+    const fakeCtx = {
+      get: () => undefined, // no agents service: spawn fails closed with error
+      effect: (fn) => { disposers.push(fn); return () => {}; },
+      on: () => () => {},
+      inject: (deps, cb) => {
+        if (deps.includes('workspaceRegistry')) {
+          cb({ get: () => ({ list: () => [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-u', 'sess-w'] }] }) });
+        }
+        if (deps.includes('tools')) {
+          cb({ tools: { register: (d) => { registered.push(d); return () => {}; } } });
+        }
+        if (deps.includes('settings')) {
+          // Automatic mode for this test: workerCanFinish true.
+          cb({ settings: { get: () => ({ workerCanFinish: true }) } });
+        }
+      },
+    };
+    try {
+      applyScopedTools(fakeCtx, { enabled: true, dshHome }, WORKER_TOOLS);
+      const byNameS = (n) => registered.find((d) => d.name === n);
+      assert.ok(byNameS('finish_task'), 'worker subset mounts finish_task');
+      assert.ok(byNameS('get_my_task'), 'worker subset mounts get_my_task');
+      assert.ok(!byNameS('approve_task'), 'no USER-ONLY tools in worker subset');
+      // Fixtures through the same DB file the scoped runtime owns.
+      const direct = openDatabase({ path: dbFilePath(dshHome) });
+      const wsRow = qEnsure(direct.db, 'C:/repo-a');
+      const one = qEnqueue(direct.db, wsRow, { type: 'bug', title: 'One' });
+      const two = qEnqueue(direct.db, wsRow, { type: 'bug', title: 'Two' });
+      qApprove(direct.db, one.id);
+      qApprove(direct.db, two.id);
+      qBind(direct.db, one.id, 'sess-w');
+      direct.close();
+      const execW = { agent: { session: { header: { id: 'sess-w' } } } };
+      const done = await byNameS('finish_task').execute({ outcome: 'done' }, execW);
+      assert.equal(done.task.state, 'done');
+      assert.equal(done.promoted.id, two.id);
+      // No agents in the fake ctx: promotion stands WITH the error, never limbo.
+      assert.match(done.spawn.error, /agents service unavailable/);
+      const verify = openDatabase({ path: dbFilePath(dshHome) });
+      assert.equal(qGet(verify.db, two.id).state, 'active');
+      verify.close();
+    } finally {
+      for (const fn of disposers) { try { const d = fn(); if (typeof d === 'function') d(); } catch {} }
+      rmSync(dshHome, { recursive: true, force: true });
+    }
+  });
+
+  it('scoped worker entry hides finish_task in manual mode (default)', async () => {
+    const { applyScopedTools, WORKER_TOOLS } = await import('../lib/scoped.js');
+    const registered = [];
+    const fakeCtx = {
+      get: () => undefined,
+      effect: () => () => {},
+      on: () => () => {},
+      inject: (deps, cb) => {
+        if (deps.includes('workspaceRegistry')) {
+          cb({ get: () => ({ list: () => [] }) });
+        }
+        if (deps.includes('tools')) {
+          cb({ tools: { register: (d) => { registered.push(d); return () => {}; } } });
+        }
+        if (deps.includes('settings')) {
+          cb({ settings: { get: () => ({ workerCanFinish: false }) } });
+        }
+      },
+    };
+    applyScopedTools(fakeCtx, { enabled: true }, WORKER_TOOLS);
+    const names = registered.map((d) => d.name).sort();
+    assert.deepEqual(names, ['get_my_task', 'list_tasks', 'task_detail']);
+  });
+
+  it('finish gate unit: mounts/unmounts on sync', async () => {
+    const { createFinishGate, workerCanFinishOf, workerCanMergeOf } = await import('../lib/finish-toggle.js');
+    assert.equal(workerCanFinishOf(undefined), false);
+    assert.equal(workerCanFinishOf({}), false);
+    assert.equal(workerCanFinishOf({ workerCanFinish: true }), true);
+    assert.equal(workerCanMergeOf(undefined), false);
+    assert.equal(workerCanMergeOf({}), false);
+    assert.equal(workerCanMergeOf({ workerCanMerge: true }), true);
+    assert.equal(workerCanMergeOf({ workerCanMerge: 'yes' }), false);
+    const mounted = [];
+    let disposed = 0;
+    const fakeDefs = [{ name: 'get_my_task' }, { name: 'finish_task' }];
+    const listeners = [];
+    const gate = createFinishGate({
+      all: fakeDefs,
+      register: (d) => { mounted.push(d.name); return () => { disposed += 1; }; },
+      initiallyEnabled: false,
+      onChange: (cb) => { listeners.push(cb); return () => {}; },
+    });
+    assert.deepEqual(mounted, ['get_my_task']);
+    gate.sync(true);
+    assert.deepEqual(mounted, ['get_my_task', 'finish_task']);
+    gate.sync(true); // idempotent: no double mount
+    assert.deepEqual(mounted, ['get_my_task', 'finish_task']);
+    listeners[0](true); // event path
+    assert.deepEqual(mounted, ['get_my_task', 'finish_task']);
+    listeners[0](false);
+    assert.equal(disposed, 1);
+    gate.dispose();
+  });
+
+  it('a failed promotion spawn keeps the task active with the error attached', async () => {
+    const { h, store, wsA } = mockStore();
+    store.spawnHooks = {
+      spawnForPromotion: async () => ({ error: 'no agents today' }),
+    };
+    const defs = makeToolDefinitions(store);
+    store.workspaceRegistry.list = () => [
+      { id: 'a', path: 'C:/repo-a', sessionIds: ['sess-a', 'sess-worker'] },
+      { id: 'b', path: 'C:/repo-b', sessionIds: ['sess-b'] },
+    ];
+    const execW = { agent: { session: { header: { id: 'sess-worker' } } } };
+    const one = enqueue(h.db, wsA, { type: 'bug', title: 'First' });
+    const two = enqueue(h.db, wsA, { type: 'bug', title: 'Second' });
+    await byName(defs, 'approve_task').execute({ id: one.id }, execA);
+    await byName(defs, 'approve_task').execute({ id: two.id }, execA);
+    await byName(defs, 'get_my_task').execute({}, execW);
+    const done = await byName(defs, 'finish_task').execute({ outcome: 'done' }, execW);
+    assert.equal(done.promoted.id, two.id);
+    assert.deepEqual(done.spawn, { error: 'no agents today' });
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, two.id).state, 'active');
+    const [c] = byName(defs, 'finish_task').output.render({ outcome: 'done' }, done);
+    assert.match(c.text, /worker spawn failed: no agents today/);
+    h.close();
+  });
+
   it('search_tasks finds history before filing (dedup)', async () => {
     const { h, store, wsA } = mockStore();
     const defs = makeToolDefinitions(store);
@@ -197,8 +456,8 @@ describe('queue ownership + clash (FIX-07/FIX-12)', () => {
     approve(h.db, a.id);
     close(h.db, a.id, 'done');
     const b = enqueue(h.db, wsA, { type: 'bug', title: 'Same name' });
-    // Force the residual: pretend branch task/<b.id>-same-name is taken by history.
-    h.db.prepare("UPDATE tasks SET branch = ?, state = ? WHERE id = ?").run('task/' + b.id + '-same-name', 'done', a.id);
+    // Force the residual: pretend branch task/<b.seq>-same-name is taken by history.
+    h.db.prepare("UPDATE tasks SET branch = ?, state = ? WHERE id = ?").run('task/' + b.seq + '-same-name', 'done', a.id);
     const r = approve(h.db, b.id);
     assert.ok(r.promoted.branch.endsWith('-2'), 'expected -2 suffix, got ' + r.promoted.branch);
     h.close();

@@ -121,7 +121,7 @@ describe('presets-sync', () => {
   it('syncPresets:false boot leaves the user root alone', async () => {
     const host = await bootHost({ config: { syncPresets: false } });
     try {
-      assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '' });
+      assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false });
       let entries = [];
       try {
         entries = readdirSync(join(host.dshHome, USER_PRESET_DIR));
@@ -134,5 +134,22 @@ describe('presets-sync', () => {
 
   it('userPresetRoot joins the harness-home user preset dir', () => {
     assert.equal(userPresetRoot('/h'), join('/h', '.agent-presets'));
+  });
+
+  it('worker preset pins the auto-merge liturgy (--no-ff, abort on conflict)', () => {
+    // Content pin: future preset edits must not silently drop the merge
+    // rule or the conflict discipline. Reads the SHIPPED source file.
+    const text = readFileSync(join(pluginPresetsRoot(), 'taskqueue-worker', 'agent.cordis.yml'), 'utf8');
+    assert.match(text, /## Auto-merge/);
+    assert.match(text, /git merge --no-ff <branch>/);
+    assert.match(text, /git merge --abort/);
+    assert.match(text, /FORBIDDEN to unblock yourself/);
+    assert.match(text, /--theirs\/--ours/);
+    assert.match(text, /The task stays open/);
+    // The default-off rule survives alongside: manual mode never touches base.
+    assert.match(text, /when auto-merge is OFF/);
+    assert.match(text, /merged: <SHA>/);
+    // The spawn message (not memory) is authoritative for the modes.
+    assert.match(text, /that line\s+is authoritative, NOT your memory/);
   });
 });

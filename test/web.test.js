@@ -33,6 +33,31 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.value.tasks.length, 1);
     assert.equal(out.value.tasks[0].title, 'Login mobile');
     assert.equal(out.value.workspace.id, 'a');
+    // Manual defaults without a settings ctx.
+    assert.equal(out.value.workerCanFinish, false);
+    assert.equal(out.value.workerCanMerge, false);
+  });
+
+  it('snapshot reports the live finish mode from settings', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store, {
+      ctx: { get: (key) => key === 'settings' ? { get: () => ({ workerCanFinish: true }) } : undefined },
+    });
+    const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.workerCanFinish, true);
+    assert.equal(out.value.workerCanMerge, false);
+  });
+
+  it('snapshot reports the live merge mode from settings', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store, {
+      ctx: { get: (key) => key === 'settings' ? { get: () => ({ workerCanMerge: true }) } : undefined },
+    });
+    const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.workerCanMerge, true);
+    assert.equal(out.value.workerCanFinish, false);
   });
 
   it('snapshot is workspace-scoped (sess-b sees nothing of repo-a)', async () => {
@@ -52,6 +77,23 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.ok, true);
     assert.equal(out.value.task.state, 'active');
     assert.ok(out.value.promoted);
+  });
+
+  it('snapshot rows carry the per-workspace seq; approve accepts it', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const handlers = createWebHandlers(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other first', spec: '' }); // global id 1
+    const row = enqueue(h.db, wsA, { type: 'bug', title: 'Panel UI', spec: '' }); // global id 2, seq 1
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap.ok, true);
+    assert.equal(snap.value.tasks.length, 1);
+    assert.equal(snap.value.tasks[0].seq, 1);
+    // Approve by the visible #1 (not the global id 2).
+    const out = await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: 1 });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, row.id);
+    assert.equal(out.value.task.state, 'active');
+    h.close();
   });
 
   it('cross-workspace approve mutates nothing', async () => {
@@ -120,5 +162,22 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.ok, true);
     assert.equal(out.value.task.state, 'active');
     assert.match(out.value.spawn.error, /no agents today/);
+  });
+
+  it('close promotion spawns the next worker through the shared helper', async () => {
+    const { store } = mockStore();
+    // No hooks.spawnWorker: the real path (spawnForPromotion) runs and fails
+    // closed without agents — the promotion still stands with the error.
+    const handlers = createWebHandlers(store, { ctx: { get: () => undefined } });
+    const one = enqueue(store.getDb(), 1, { type: 'bug', title: 'First', spec: '' });
+    const two = enqueue(store.getDb(), 1, { type: 'bug', title: 'Second', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: one.id });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: two.id });
+    const out = await routeWebCall(handlers, 'close', { sessionId: 'sess-a', id: one.id, outcome: 'done' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.state, 'done');
+    assert.equal(out.value.promoted.id, two.id);
+    assert.equal(out.value.promoted.state, 'active');
+    assert.match(out.value.spawn.error, /agents service unavailable/);
   });
 });

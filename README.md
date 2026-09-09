@@ -6,11 +6,35 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   requested task, so "queue task A and task B" files two drafts; the user
   approves (`approve_task`) or discards each.
 - The queue promotes the oldest `queued` task to `active` when the slot frees;
-  approving (or closing) a task auto-spawns its worker chat
-  (`taskqueue-worker` preset, English prompt) bound via `worker_session`.
+  EVERY promotion auto-spawns its worker chat (`taskqueue-worker` preset,
+  English prompt) bound via `worker_session` — approving a task, closing
+  one from the panel, AND the worker finishing its own task via
+  `finish_task` all open the next chat, so an active task never sits in
+  limbo with no session. A spawn failure never rolls the promotion back:
+  the task stays active and the error rides the result as `spawn` (panel
+  card line / tool render suffix), with the lazy `get_my_task` bind as
+  manual fallback.
   `close_task(id, outcome)` with `done|cancelled|failed` frees the slot.
 - The worker reads its task with `get_my_task` (spawn already binds the
-  session), works on `task/<id>-<slug>` in the user checkout, pushes, reports ready.
+  session), works on `task/<seq>-<slug>` (per-workspace visible number) in the user checkout, pushes, reports ready.
+- Finish mode (`tasks.workerCanFinish` setting, default `false` = manual):
+  when `false`, the worker preset does NOT mount `finish_task` — the model
+  never sees it and only the human closes tasks from the panel (which then
+  spawns next). When `true` (automatic), the worker closes its own task
+  with `finish_task` and the queue advances on its own. Change it in
+  Settings → Plugins → Plugin configuration → Tasks card (switch
+  "Worker closes its own task"), or directly in `~/.dsh/settings.yaml`
+  under `tasks:`. The Tasks panel header shows the live mode; flipping
+  the setting mounts/unmounts the tool live.
+- Auto-merge (`tasks.workerCanMerge` setting, default `false`): same card,
+  switch "Worker merges into base (--no-ff)". When `true`, the worker
+  merges its own branch into the base with `git merge --no-ff` (message
+  `Merge task #<seq>: <title>`, one task = one merge commit) BEFORE
+  closing, after rebase + green suite + fast-forward base check. At ANY
+  conflict it aborts (`git merge --abort`), leaves the tree untouched,
+  reports the conflicting files, and waits: the task stays open, no
+  --theirs/--ours, no hand resolutions, no force on base. When `false`
+  the human merges outside and the worker never touches base.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
 - Everything is English: tool fields (`type/title/state/outcome`), presets,
   panel, prompts, and specs.

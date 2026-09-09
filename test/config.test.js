@@ -45,11 +45,21 @@ describe('config guard', () => {
 
 describe('tasksSchema (settings)', () => {
   it('resolves defaults like every official caller expects', () => {
-    assert.deepEqual(tasksSchema({}), { baseBranch: '' });
-    assert.deepEqual(tasksSchema({ baseBranch: 'main' }), { baseBranch: 'main' });
+    assert.deepEqual(tasksSchema({}), { baseBranch: '', workerCanFinish: false, workerCanMerge: false });
+    assert.deepEqual(tasksSchema({ baseBranch: 'main' }), { baseBranch: 'main', workerCanFinish: false, workerCanMerge: false });
   });
 
   it('rejects non-string baseBranch', () => {
     assert.throws(() => tasksSchema({ baseBranch: 42 }), /baseBranch/);
+  });
+
+  it('workerCanFinish defaults false and validates booleans', () => {
+    assert.deepEqual(tasksSchema({ workerCanFinish: true }), { baseBranch: '', workerCanFinish: true, workerCanMerge: false });
+    assert.throws(() => tasksSchema({ workerCanFinish: 'yes' }), /workerCanFinish/);
+  });
+
+  it('workerCanMerge defaults false and validates booleans', () => {
+    assert.deepEqual(tasksSchema({ workerCanMerge: true }), { baseBranch: '', workerCanFinish: false, workerCanMerge: true });
+    assert.throws(() => tasksSchema({ workerCanMerge: 'yes' }), /workerCanMerge/);
   });
 });
