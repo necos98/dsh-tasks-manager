@@ -33,10 +33,10 @@ function byName(defs, name) {
 }
 
 describe('tool registration (FIX-02)', () => {
-  it('registers 8 tools with output { schema, render }', () => {
+  it('registers 9 tools with output { schema, render }', () => {
     const { store } = mockStore();
     const defs = makeToolDefinitions(store);
-    assert.equal(defs.length, 8);
+    assert.equal(defs.length, 9);
     for (const d of defs) {
       assert.ok(d.output && typeof d.output === 'object', d.name + ' has output');
       assert.equal(typeof d.output.render, 'function', d.name + ' has render fn');
@@ -61,6 +61,14 @@ describe('tool registration (FIX-02)', () => {
     const finish = byName(defs, 'finish_task');
     assert.ok(finish.parameters.required.includes('outcome'));
     assert.deepEqual(finish.parameters.properties.outcome.enum, ['done', 'failed']);
+    const edit = byName(defs, 'edit_draft');
+    assert.ok(edit.parameters.required.includes('id'));
+    assert.ok(!edit.parameters.required.includes('title'));
+    assert.ok(!edit.parameters.required.includes('spec'));
+    assert.ok(!edit.parameters.required.includes('type'));
+    assert.deepEqual(edit.parameters.properties.type.enum, ['feature', 'bug', 'refactor', 'chore']);
+    assert.ok(edit.output && edit.output.schema && edit.output.schema.type, 'edit_draft has schema');
+    assert.equal(typeof edit.output.render, 'function', 'edit_draft has render fn');
   });
 });
 
@@ -74,6 +82,54 @@ describe('tool execute (structured values + render)', () => {
     assert.equal(v.title, 'Login mobile');
     const [c] = t.output.render({ type: 'bug', title: 'Login mobile' }, v);
     assert.match(c.text, /^draft #\d+ \[draft\]/);
+  });
+
+  it('edit_draft revises title/spec/type on a draft with recomputed slug', async () => {
+    const { h, store } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const edit = byName(defs, 'edit_draft');
+    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Login mobile', spec: 'old' }, execA);
+    const renamed = await edit.execute({ id: v.id, title: 'Login desktop' }, execA);
+    assert.equal(renamed.title, 'Login desktop');
+    assert.equal(renamed.slug, 'login-desktop');
+    assert.equal(renamed.type, 'bug');
+    assert.equal(renamed.spec, 'old');
+    const respec = await edit.execute({ id: v.seq, spec: '' }, execA);
+    assert.equal(respec.spec, '');
+    assert.equal(respec.title, 'Login desktop');
+    const retyped = await edit.execute({ id: v.seq, type: 'feature' }, execA);
+    assert.equal(retyped.type, 'feature');
+    assert.equal(retyped.title, 'Login desktop');
+    const [c] = edit.output.render({ id: v.id, title: 'Login desktop' }, retyped);
+    assert.match(c.text, /^edited #\d+ \[draft\]/);
+    h.close();
+  });
+
+  it('edit_draft on a non-draft rejects with bad-state', async () => {
+    const { h, store } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine' }, execA);
+    await byName(defs, 'approve_task').execute({ id: v.id }, execA);
+    await assert.rejects(() => byName(defs, 'edit_draft').execute({ id: v.id, title: 'Late' }, execA), /only drafts can be edited/);
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, v.id).title, 'Mine');
+    h.close();
+  });
+
+  it('edit_draft cross-workspace mutates nothing', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'B first' }); // global id 1, seq 1 in B
+    const a1 = enqueue(h.db, wsA, { type: 'bug', title: 'A first' }); // global id 2, seq 1 in A
+    const a2 = enqueue(h.db, wsA, { type: 'bug', title: 'A second' }); // global id 3, seq 2 in A
+    const edit = byName(defs, 'edit_draft');
+    // 2 and 3 are A's global ids / seqs of A rows: invisible from B.
+    await assert.rejects(() => edit.execute({ id: 2, title: 'Hijack' }, execB), /no task #2 here/);
+    await assert.rejects(() => edit.execute({ id: 3, title: 'Hijack' }, execB), /no task #3 here/);
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, a1.id).title, 'A first');
+    assert.equal(get(h.db, a2.id).title, 'A second');
+    h.close();
   });
 
   it('tool text shows the per-workspace number, not the global id', async () => {

@@ -14,7 +14,7 @@
 # block.
 #
 # Task-queue tools come from the dsh-tasks-manager/intake-tools scoped entry:
-# ONLY enqueue_task, list_tasks, task_detail. approve/close are USER-ONLY and
+# ONLY enqueue_task, edit_draft, list_tasks, task_detail. approve/close are USER-ONLY and
 # no preset mounts them.
 
 # -- identity ---------------------------------------------------------------
@@ -103,6 +103,8 @@
       - approve_task and close_task are USER-ONLY. Never call them, never
         suggest you approved anything.
       - One draft per requested change; several requests mean several drafts.
+        If a filed draft needs a fix (wrong title, incomplete spec), amend it
+        with edit_draft — never file a duplicate draft for the same change.
         No auto-start, no queue promotion: the user approves, the tool promotes.
       - The worker is a pure code executor: it writes code from your spec, it
         never analyzes, investigates, or decides scope on your behalf.
@@ -176,7 +178,7 @@
 
 # -- taskqueue plugin tools (scoped subset from dsh-tasks-manager) -----------------
 #
-# The intake agent sees ONLY enqueue_task, list_tasks, task_detail,
+# The intake agent sees ONLY enqueue_task, edit_draft, list_tasks, task_detail,
 # search_tasks. approve/close stay USER-ONLY: no preset mounts them.
 
 - id: taskqueue-intake-tools

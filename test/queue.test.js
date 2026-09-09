@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, bindSession, close, enqueue, ensureWorkspace, get, list, resolveTask, search, slugify } from '../lib/queue.js';
+import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, resolveTask, search, slugify } from '../lib/queue.js';
 
 function fresh() { const h = openMemory(); const ws = ensureWorkspace(h.db, 'C:/repo'); return { h, ws }; }
 
@@ -52,6 +52,50 @@ describe('queue', () => {
     const disc = close(h.db, b.id, 'cancelled'); assert.equal(disc.task.state, 'cancelled');
     assert.equal(codeOf(() => approve(h.db, a.id)), 'bad-state');
     assert.equal(codeOf(() => close(h.db, a.id, 'shipped')), 'bad-outcome');
+    h.close();
+  });
+
+  it('editDraft revises a draft: title recomputes slug, spec/type preserved or updated', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Login mobile', spec: 'old spec' });
+    const before = get(h.db, a.id).updated_at;
+    const renamed = editDraft(h.db, a.id, { title: 'Login desktop' });
+    assert.equal(renamed.title, 'Login desktop');
+    assert.equal(renamed.slug, 'login-desktop');
+    assert.equal(renamed.type, 'bug');
+    assert.equal(renamed.spec, 'old spec');
+    const respec = editDraft(h.db, a.id, { spec: 'new spec' });
+    assert.equal(respec.spec, 'new spec');
+    assert.equal(respec.title, 'Login desktop');
+    const cleared = editDraft(h.db, a.id, { spec: '' });
+    assert.equal(cleared.spec, '');
+    const retyped = editDraft(h.db, a.id, { type: 'feature' });
+    assert.equal(retyped.type, 'feature');
+    assert.equal(retyped.title, 'Login desktop');
+    assert.ok(retyped.updated_at >= before, 'updated_at moves forward');
+    h.close();
+  });
+
+  it('editDraft rejects non-drafts, unknown ids, and bad type/title', () => {
+    const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Mine' });
+    assert.equal(codeOf(() => editDraft(h.db, 9999, { title: 'X' })), 'not-found');
+    assert.equal(codeOf(() => editDraft(h.db, a.id, { type: 'nope' })), 'bad-type');
+    assert.equal(codeOf(() => editDraft(h.db, a.id, { title: '' })), 'bad-title');
+    assert.equal(codeOf(() => editDraft(h.db, a.id, { title: '   ' })), 'bad-title');
+    assert.equal(get(h.db, a.id).title, 'Mine');
+    approve(h.db, a.id); // active now
+    assert.equal(codeOf(() => editDraft(h.db, a.id, { title: 'Late' })), 'bad-state');
+    close(h.db, a.id, 'done');
+    assert.equal(codeOf(() => editDraft(h.db, a.id, { title: 'Later' })), 'bad-state');
+    const b = enqueue(h.db, ws, { type: 'chore', title: 'Second' });
+    approve(h.db, b.id); // queued behind nothing? active or queued — both non-draft
+    assert.equal(codeOf(() => editDraft(h.db, b.id, { spec: 'x' })), 'bad-state');
+    const c = enqueue(h.db, ws, { type: 'chore', title: 'Third' });
+    const disc = close(h.db, c.id, 'cancelled');
+    assert.equal(disc.task.state, 'cancelled');
+    assert.equal(codeOf(() => editDraft(h.db, c.id, { spec: 'x' })), 'bad-state');
     h.close();
   });
 
