@@ -35,7 +35,7 @@ describe('workflow on the real host', () => {
   });
 
   it('resolves the tasks settings namespace with defaults (FIX-05/06)', () => {
-    assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false });
+    assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '' });
   });
 
   it('/tasks returns a CommandResult (FIX-04 acceptance)', async () => {

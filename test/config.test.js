@@ -45,8 +45,8 @@ describe('config guard', () => {
 
 describe('tasksSchema (settings)', () => {
   it('resolves defaults like every official caller expects', () => {
-    assert.deepEqual(tasksSchema({}), { baseBranch: '', workerCanFinish: false, workerCanMerge: false });
-    assert.deepEqual(tasksSchema({ baseBranch: 'main' }), { baseBranch: 'main', workerCanFinish: false, workerCanMerge: false });
+    assert.deepEqual(tasksSchema({}), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '' });
+    assert.deepEqual(tasksSchema({ baseBranch: 'main' }), { baseBranch: 'main', workerCanFinish: false, workerCanMerge: false, workerRules: '' });
   });
 
   it('rejects non-string baseBranch', () => {
@@ -54,12 +54,20 @@ describe('tasksSchema (settings)', () => {
   });
 
   it('workerCanFinish defaults false and validates booleans', () => {
-    assert.deepEqual(tasksSchema({ workerCanFinish: true }), { baseBranch: '', workerCanFinish: true, workerCanMerge: false });
+    assert.deepEqual(tasksSchema({ workerCanFinish: true }), { baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '' });
     assert.throws(() => tasksSchema({ workerCanFinish: 'yes' }), /workerCanFinish/);
   });
 
   it('workerCanMerge defaults false and validates booleans', () => {
-    assert.deepEqual(tasksSchema({ workerCanMerge: true }), { baseBranch: '', workerCanFinish: false, workerCanMerge: true });
+    assert.deepEqual(tasksSchema({ workerCanMerge: true }), { baseBranch: '', workerCanFinish: false, workerCanMerge: true, workerRules: '' });
     assert.throws(() => tasksSchema({ workerCanMerge: 'yes' }), /workerCanMerge/);
+  });
+
+  it('workerRules defaults to empty string and stays verbatim', () => {
+    assert.deepEqual(tasksSchema({ workerRules: 'alla fine del lavoro aggiorna la wiki' }), {
+      baseBranch: '', workerCanFinish: false, workerCanMerge: false,
+      workerRules: 'alla fine del lavoro aggiorna la wiki',
+    });
+    assert.throws(() => tasksSchema({ workerRules: 42 }), /workerRules/);
   });
 });

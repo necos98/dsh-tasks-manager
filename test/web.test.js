@@ -36,6 +36,7 @@ describe('web RPC (panel channel)', () => {
     // Manual defaults without a settings ctx.
     assert.equal(out.value.workerCanFinish, false);
     assert.equal(out.value.workerCanMerge, false);
+    assert.equal(out.value.workerRules, '');
   });
 
   it('snapshot reports the live finish mode from settings', async () => {
@@ -58,6 +59,16 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.ok, true);
     assert.equal(out.value.workerCanMerge, true);
     assert.equal(out.value.workerCanFinish, false);
+  });
+
+  it('snapshot reports the live worker rules from settings', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store, {
+      ctx: { get: (key) => key === 'settings' ? { get: () => ({ workerRules: 'alla fine del lavoro aggiorna la wiki' }) } : undefined },
+    });
+    const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.workerRules, 'alla fine del lavoro aggiorna la wiki');
   });
 
   it('snapshot is workspace-scoped (sess-b sees nothing of repo-a)', async () => {
