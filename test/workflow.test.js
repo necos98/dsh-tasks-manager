@@ -16,7 +16,7 @@ describe('workflow on the real host', () => {
 
   it('manual mode hides finish_task by default (workerCanFinish:false)', () => {
     assert.deepEqual(toolNames(host.ctx), [
-      'approve_task', 'close_task', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
     ]);
   });
 
@@ -26,11 +26,11 @@ describe('workflow on the real host', () => {
     const settings = host.ctx.get('settings');
     settings.publish({ tasks: { workerCanFinish: true } });
     assert.deepEqual(toolNames(host.ctx), [
-      'approve_task', 'close_task', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
     ]);
     settings.publish({ tasks: { workerCanFinish: false } });
     assert.deepEqual(toolNames(host.ctx), [
-      'approve_task', 'close_task', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
     ]);
   });
 
@@ -42,6 +42,24 @@ describe('workflow on the real host', () => {
     const settled = await runCommand(host.ctx, 'sess-a', '/tasks');
     assert.equal(settled.result.kind, 'success');
     assert.match(settled.result.text, /Tasks panel/);
+  });
+
+  it('triage amends a draft via edit_draft; approve still promotes it', async () => {
+    const filed = await callTool(host.ctx, 'sess-a', 'enqueue_task', {
+      type: 'bug', title: 'Login mobile', spec: 'problem: crash',
+    });
+    const edited = await callTool(host.ctx, 'sess-a', 'edit_draft', {
+      id: filed.value.id, title: 'Login desktop', spec: 'problem: crash; acceptance: no crash',
+    });
+    assert.equal(edited.value.title, 'Login desktop');
+    assert.equal(edited.value.slug, 'login-desktop');
+    assert.match(edited.content[0].text, /^edited #\d+ \[draft\]/);
+    const approved = await callTool(host.ctx, 'sess-a', 'approve_task', { id: filed.value.id });
+    assert.equal(approved.value.task.state, 'active');
+    assert.match(approved.content[0].text, /task\/\d+-login-desktop/);
+    // Leave the shared host as found: close the task so the slot is free
+    // for the tests below.
+    await callTool(host.ctx, 'sess-a', 'close_task', { id: filed.value.id, outcome: 'done' });
   });
 
   it('triage files a draft; approve promotes it to active', async () => {
