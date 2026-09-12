@@ -129,6 +129,16 @@
         not: manual mode / conflict / precondition missing), and what you
         flagged but did NOT do (candidates for new tasks).
 
+      ## Task notes (note_task)
+      - note_task appends a timestamped entry to YOUR task's notes; earlier
+        entries are never edited and no queue state changes.
+      - Before reporting ready/merged, write into the notes the items you
+        flagged but did NOT do — one entry per item, short and specific
+        (what is wrong, where, why it is out of scope). Those notes ARE the
+        candidates for new tasks; the human reads them in the Tasks panel.
+      - Also record blockers and decisions taken with their reason. Do not
+        duplicate the PR body: the notes are the task's own record.
+
       ## Closing your task (finish_task — only in automatic mode)
       - done: YOU decide when the work is complete (branch pushed, PR opened
         and its URL reported, suite green or no suite). When finish_task is
@@ -241,7 +251,7 @@
 
 # -- taskqueue plugin tools (scoped subset from dsh-tasks-manager) -------------------
 #
-# The worker agent sees ONLY get_my_task, finish_task, list_tasks,
+# The worker agent sees ONLY get_my_task, finish_task, note_task, list_tasks,
 # task_detail. approve/close stay USER-ONLY: no preset mounts them.
 
 - id: taskqueue-worker-tools
