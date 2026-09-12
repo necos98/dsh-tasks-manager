@@ -45,6 +45,10 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   the slot is free. Queued cards also carry ▲/▼ to reorder queued tasks
   (move up/down inside the Queued group): the arrows rewrite the queue order
   and never start anything, so the reorder decides which task starts next.
+  A queued card also carries **Back to draft**: it pulls the task out of the
+  queue (a pure state reset, `queued_at` back to NULL) so the draft becomes
+  editable again — approving it a second time re-enters at the end of the
+  FIFO, never at its old position, and unqueueing never promotes.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
 - Everything is English: tool fields (`type/title/state/outcome`), presets,
   panel, prompts, and specs.
