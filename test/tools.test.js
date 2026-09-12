@@ -33,10 +33,10 @@ function byName(defs, name) {
 }
 
 describe('tool registration (FIX-02)', () => {
-  it('registers 9 tools with output { schema, render }', () => {
+  it('registers 10 tools with output { schema, render }', () => {
     const { store } = mockStore();
     const defs = makeToolDefinitions(store);
-    assert.equal(defs.length, 9);
+    assert.equal(defs.length, 10);
     for (const d of defs) {
       assert.ok(d.output && typeof d.output === 'object', d.name + ' has output');
       assert.equal(typeof d.output.render, 'function', d.name + ' has render fn');
@@ -69,6 +69,10 @@ describe('tool registration (FIX-02)', () => {
     assert.deepEqual(edit.parameters.properties.type.enum, ['feature', 'bug', 'refactor', 'chore']);
     assert.ok(edit.output && edit.output.schema && edit.output.schema.type, 'edit_draft has schema');
     assert.equal(typeof edit.output.render, 'function', 'edit_draft has render fn');
+    // note_task takes ONLY the body: the target is the session's bound task.
+    const note = byName(defs, 'note_task');
+    assert.deepEqual(note.parameters.required, ['text']);
+    assert.ok(!('id' in note.parameters.properties), 'note_task has no id parameter');
   });
 });
 
@@ -332,6 +336,49 @@ describe('tool execute (structured values + render)', () => {
     h.close();
   });
 
+  it('note_task appends to the session-bound active task and reports the entry count', async () => {
+    const { h, store, wsA } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const note = byName(defs, 'note_task');
+    const { get } = await import('../lib/queue.js');
+    // sess-a approved but never bound as worker: no task to annotate.
+    const t = enqueue(h.db, wsA, { type: 'bug', title: 'Mine' });
+    await byName(defs, 'approve_task').execute({ id: t.id }, execA);
+    await assert.rejects(() => note.execute({ text: 'too early' }, execA), /no active task bound/);
+    assert.equal(get(h.db, t.id).notes, '');
+    store.workspaceRegistry.list = () => [
+      { id: 'a', path: 'C:/repo-a', sessionIds: ['sess-a', 'sess-worker'] },
+      { id: 'b', path: 'C:/repo-b', sessionIds: ['sess-b'] },
+    ];
+    const execW = { agent: { session: { header: { id: 'sess-worker' } } } };
+    await byName(defs, 'get_my_task').execute({}, execW); // binds sess-worker
+    const before = get(h.db, t.id);
+    const first = await note.execute({ text: 'flagged: helper duplicated in lib/net.js' }, execW);
+    assert.match(first.notes, /^- \[.+\] flagged: helper duplicated in lib\/net\.js$/);
+    // A note touches no queue field and promotes nothing.
+    assert.equal(first.state, before.state);
+    assert.equal(first.branch, before.branch);
+    assert.equal(first.worker_session, before.worker_session);
+    assert.equal(first.queued_at, before.queued_at);
+    assert.ok(first.updated_at >= before.updated_at);
+    const [c1] = note.output.render({ text: 'x' }, first);
+    assert.match(c1.text, /^noted #\d+ \[active\] Mine \(bug\) branch=\S+ \| notes: 1$/);
+    const second = await note.execute({ text: 'blocker: gh unauthenticated' }, execW);
+    const [c2] = note.output.render({ text: 'x' }, second);
+    assert.match(c2.text, /\| notes: 2$/);
+    const lines = second.notes.split('\n');
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0], first.notes, 'the earlier entry is never rewritten');
+    assert.equal(get(h.db, t.id).state, 'active');
+    assert.equal(get(h.db, t.id).notes, second.notes);
+    // Empty whitespace is rejected by the domain rule, not the schema.
+    await assert.rejects(() => note.execute({ text: '   ' }, execW), /non-empty/);
+    // The note is visible to the model through the task_detail projection.
+    const [d] = byName(defs, 'task_detail').output.render({ id: 1 }, get(h.db, t.id));
+    assert.equal(JSON.parse(d.text).notes, second.notes);
+    h.close();
+  });
+
   it('finish_task promotion spawns the next worker (no limbo)', async () => {
     const { h, store, wsA } = mockStore();
     // Host-style hook: what lib/index.js injects as runtime.spawnHooks.
@@ -434,6 +481,7 @@ describe('tool execute (structured values + render)', () => {
       const byNameS = (n) => registered.find((d) => d.name === n);
       assert.ok(byNameS('finish_task'), 'worker subset mounts finish_task');
       assert.ok(byNameS('get_my_task'), 'worker subset mounts get_my_task');
+      assert.ok(byNameS('note_task'), 'worker subset mounts note_task');
       assert.ok(!byNameS('approve_task'), 'no USER-ONLY tools in worker subset');
       // Fixtures through the same DB file the scoped runtime owns.
       const direct = openDatabase({ path: dbFilePath(dshHome) });
@@ -480,7 +528,9 @@ describe('tool execute (structured values + render)', () => {
     };
     applyScopedTools(fakeCtx, { enabled: true }, WORKER_TOOLS);
     const names = registered.map((d) => d.name).sort();
-    assert.deepEqual(names, ['get_my_task', 'list_tasks', 'task_detail']);
+    // note_task is NOT gated by the finish switch: it changes no queue state,
+    // so the worker keeps it in manual mode too.
+    assert.deepEqual(names, ['get_my_task', 'list_tasks', 'note_task', 'task_detail']);
   });
 
   it('finish gate unit: mounts/unmounts on sync', async () => {

@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, editDraft, enqueue, ensureWorkspace, get } from '../lib/queue.js';
+import { approve, appendNote, editDraft, enqueue, ensureWorkspace, get } from '../lib/queue.js';
 import { createWebHandlers, routeWebCall } from '../lib/web.js';
 
 // Mock store: in-memory DB + two-workspace registry. No DSH boot needed.
@@ -78,6 +78,34 @@ describe('web RPC (panel channel)', () => {
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-b' });
     assert.equal(out.ok, true);
     assert.deepEqual(out.value.tasks, []);
+  });
+
+  it('snapshot carries the notes log of the caller workspace only', async () => {
+    // The panel reads notes off the snapshot row (no new RPC endpoint): the
+    // full row already reaches it through list() + SELECT *.
+    const { h, store, wsA, wsB } = mockStore();
+    const handlers = createWebHandlers(store);
+    const mine = enqueue(h.db, wsA, { type: 'bug', title: 'Mine', spec: '' });
+    approve(h.db, mine.id);
+    appendNote(h.db, mine.id, 'flagged: notes block is read-only');
+    const theirs = enqueue(h.db, wsB, { type: 'bug', title: 'Theirs', spec: '' });
+    approve(h.db, theirs.id);
+    appendNote(h.db, theirs.id, 'other workspace note');
+    const snapA = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snapA.ok, true);
+    assert.equal(snapA.value.tasks.length, 1);
+    assert.match(snapA.value.tasks[0].notes, /^- \[.+\] flagged: notes block is read-only$/);
+    // Workspace-scoped like every other read: repo-b's notes never leak.
+    const snapB = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-b' });
+    assert.equal(snapB.value.tasks.length, 1);
+    assert.match(snapB.value.tasks[0].notes, /^- \[.+\] other workspace note$/);
+    assert.doesNotMatch(snapB.value.tasks[0].notes, /read-only/);
+    // A task without notes reads as an empty string, never null.
+    const plain = enqueue(h.db, wsA, { type: 'chore', title: 'Plain', spec: '' });
+    const again = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    const plainRow = again.value.tasks.find((t) => t.id === plain.id);
+    assert.equal(plainRow.notes, '');
+    h.close();
   });
 
   it('approve goes draft -> queued -> active via the channel', async () => {

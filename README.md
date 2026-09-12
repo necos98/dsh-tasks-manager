@@ -21,6 +21,16 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   resolves only when no task of that workspace carries the number.
 - The worker reads its task with `get_my_task` (spawn already binds the
   session), works on `task/<seq>-<slug>` (per-workspace visible number) in the user checkout, pushes, reports ready.
+- Every task carries a notes log the worker writes itself: `note_task(text)`
+  appends one timestamped entry to the ACTIVE task bound to the worker's
+  session — append-only (earlier entries are never edited), no `id` parameter
+  and no queue state change, so a note never promotes, closes or rebinds
+  anything. It is the worker's own record (findings, blockers, what it
+  flagged but did not do), it persists on the task even after it closes, the
+  Tasks panel shows it in a read-only "Notes" block inside the card, and
+  `task_detail` / `get_my_task` / `search_tasks` expose and match it.
+  Schema v6 adds `tasks.notes` (`NOT NULL DEFAULT ''`), so every row from an
+  older database simply reads as "no notes".
 - Finish mode (`tasks.workerCanFinish` setting, default `false` = manual):
   when `false`, the worker preset does NOT mount `finish_task` — the model
   never sees it and only the human closes tasks from the panel (which then
