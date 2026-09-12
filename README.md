@@ -42,7 +42,9 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   promotes exactly that task (branch assigned with the usual clash suffix)
   and spawns its worker; the switch is per project, so repo-a can stay paused
   while repo-b keeps advancing. Switching back ON promotes the FIFO head when
-  the slot is free.
+  the slot is free. Queued cards also carry ▲/▼ to reorder queued tasks
+  (move up/down inside the Queued group): the arrows rewrite the queue order
+  and never start anything, so the reorder decides which task starts next.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
 - Everything is English: tool fields (`type/title/state/outcome`), presets,
   panel, prompts, and specs.
