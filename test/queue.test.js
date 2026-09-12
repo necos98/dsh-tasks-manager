@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, queueEnabled, requeue, resolveTask, search, setQueueEnabled, slugify, startTask, unqueue } from '../lib/queue.js';
+import { approve, appendNote, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, NOTE_MAX_CHARS, NOTES_MAX_CHARS, queueEnabled, requeue, resolveTask, search, setQueueEnabled, slugify, startTask, unqueue } from '../lib/queue.js';
 
 function fresh() { const h = openMemory(); const ws = ensureWorkspace(h.db, 'C:/repo'); return { h, ws }; }
 
@@ -176,6 +176,148 @@ describe('queue', () => {
     assert.equal(codeOf(() => search(h.db, ws, '')), 'bad-query');
     assert.equal(codeOf(() => search(h.db, ws, 'x', 'nope')), 'bad-state');
     assert.equal(codeOf(() => search(h.db, ws, 'x', undefined, 0)), 'bad-limit');
+    h.close();
+  });
+
+  it('search matches text that appears ONLY in the notes log', () => {
+    const { h, ws } = fresh();
+    const ws2 = ensureWorkspace(h.db, 'C:/other');
+    const mine = enqueue(h.db, ws, { type: 'bug', title: 'Plain title', spec: 'plain spec' });
+    approve(h.db, mine.id);
+    appendNote(h.db, mine.id, 'flagged: retry helper duplicated in lib/net.js');
+    const other = enqueue(h.db, ws2, { type: 'bug', title: 'Other title', spec: 'other spec' });
+    approve(h.db, other.id);
+    appendNote(h.db, other.id, 'flagged: retry helper duplicated in lib/net.js');
+    // The word exists nowhere but in the notes.
+    assert.equal(search(h.db, ws, 'no-such-word').length, 0);
+    const hits = search(h.db, ws, 'retry helper');
+    assert.equal(hits.length, 1);
+    assert.equal(hits[0].id, mine.id);
+    // Notes are workspace-scoped like every other read: the twin row of
+    // repo-b never answers for repo-a, and vice versa.
+    const theirs = search(h.db, ws2, 'retry helper');
+    assert.equal(theirs.length, 1);
+    assert.equal(theirs[0].id, other.id);
+    // The state filter still narrows a notes-only match.
+    assert.equal(search(h.db, ws, 'retry helper', 'active').length, 1);
+    assert.equal(search(h.db, ws, 'retry helper', 'draft').length, 0);
+    assert.equal(search(h.db, ws, 'retry helper', 'done').length, 0);
+    h.close();
+  });
+});
+
+// The worker's own record: appendNote grows tasks.notes, one "- [ISO] body"
+// entry per call, and touches nothing else (no state, no queue, no branch).
+describe('notes log (appendNote)', () => {
+  const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
+
+  it('a fresh task carries an empty notes log', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Fresh' });
+    assert.equal(a.notes, '');
+    assert.equal(get(h.db, a.id).notes, '');
+    h.close();
+  });
+
+  it('appends one timestamped entry, keeps earlier ones byte-identical, bumps updated_at', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Noted' });
+    approve(h.db, a.id);
+    const before = get(h.db, a.id);
+    assert.equal(before.state, 'active');
+    const first = appendNote(h.db, a.id, 'first finding');
+    assert.match(first.notes, /^- \[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z\] first finding$/);
+    assert.ok(first.updated_at >= before.updated_at, 'updated_at moves forward');
+    // Only notes + updated_at changed: the queue fields are frozen.
+    assert.equal(first.state, before.state);
+    assert.equal(first.queued_at, before.queued_at);
+    assert.equal(first.branch, before.branch);
+    assert.equal(first.worker_session, before.worker_session);
+    assert.equal(first.created_at, before.created_at);
+    assert.equal(first.spec, before.spec);
+    const firstLine = first.notes;
+    const second = appendNote(h.db, a.id, 'second finding');
+    const lines = second.notes.split('\n');
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0], firstLine, 'the earlier entry is byte-identical');
+    assert.match(lines[1], /^- \[.+\] second finding$/);
+    assert.ok(lines[1] > lines[0], 'entries read in call order');
+    h.close();
+  });
+
+  it('keeps internal newlines of a body verbatim and trims the outer whitespace', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Multi' });
+    approve(h.db, a.id);
+    const out = appendNote(h.db, a.id, '  line one\nline two  ');
+    assert.match(out.notes, /\] line one\nline two$/);
+    h.close();
+  });
+
+  it('rejects bad text, unknown ids and non-active rows without mutating', () => {
+    const { h, ws } = fresh();
+    const draft = enqueue(h.db, ws, { type: 'bug', title: 'Draft' });
+    assert.equal(codeOf(() => appendNote(h.db, draft.id, 'too early')), 'bad-state');
+    assert.equal(get(h.db, draft.id).notes, '');
+    approve(h.db, draft.id);
+    assert.equal(codeOf(() => appendNote(h.db, 9999, 'ghost')), 'not-found');
+    assert.equal(codeOf(() => appendNote(h.db, draft.id, '')), 'bad-note');
+    assert.equal(codeOf(() => appendNote(h.db, draft.id, '   ')), 'bad-note');
+    assert.equal(codeOf(() => appendNote(h.db, draft.id, undefined)), 'bad-note');
+    assert.equal(codeOf(() => appendNote(h.db, draft.id, 42)), 'bad-note');
+    assert.equal(get(h.db, draft.id).notes, '', 'nothing was written');
+    close(h.db, draft.id, 'done');
+    assert.equal(codeOf(() => appendNote(h.db, draft.id, 'after close')), 'bad-state');
+    assert.equal(get(h.db, draft.id).notes, '');
+    h.close();
+  });
+
+  it('caps one entry at NOTE_MAX_CHARS and the whole log at NOTES_MAX_CHARS', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Capped' });
+    approve(h.db, a.id);
+    assert.equal(codeOf(() => appendNote(h.db, a.id, 'x'.repeat(NOTE_MAX_CHARS + 1))), 'note-too-long');
+    assert.equal(get(h.db, a.id).notes, '');
+    // Exactly at the cap: accepted.
+    const full = appendNote(h.db, a.id, 'x'.repeat(NOTE_MAX_CHARS));
+    assert.ok(full.notes.includes('x'.repeat(NOTE_MAX_CHARS)));
+    // Now the log is past half the total cap: filling it must trip notes-full.
+    let calls = 0;
+    let code = 'no-throw';
+    while (code === 'no-throw' && calls < 40) {
+      code = codeOf(() => appendNote(h.db, a.id, 'y'.repeat(NOTE_MAX_CHARS)));
+      calls += 1;
+    }
+    assert.equal(code, 'notes-full');
+    const kept = get(h.db, a.id).notes;
+    assert.ok(kept.length <= NOTES_MAX_CHARS);
+    assert.ok(kept.includes('x'.repeat(NOTE_MAX_CHARS)), 'the refused call left the log intact');
+    h.close();
+  });
+
+  it('notes survive requeue, unqueue, re-promotion and close untouched', () => {
+    const { h, ws } = fresh();
+    // Paused project: promotion is explicit (startTask), so each transition
+    // can be observed instead of being undone by an automatic FIFO advance.
+    setQueueEnabled(h.db, ws, false);
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Survivor' });
+    approve(h.db, a.id);
+    startTask(h.db, ws, a.id);
+    appendNote(h.db, a.id, 'written while active');
+    const written = get(h.db, a.id).notes;
+    const requeued = requeue(h.db, a.id);
+    assert.equal(requeued.task.notes, written, 'requeue keeps the log');
+    assert.equal(requeued.task.state, 'queued');
+    const unqueued = unqueue(h.db, a.id);
+    assert.equal(unqueued.task.notes, written, 'unqueue keeps the log');
+    assert.equal(unqueued.task.state, 'draft');
+    approve(h.db, a.id);
+    const resumed = startTask(h.db, ws, a.id);
+    assert.equal(resumed.task.state, 'active');
+    assert.equal(resumed.task.notes, written, 're-promotion keeps the log');
+    const closed = close(h.db, a.id, 'done');
+    assert.equal(closed.task.notes, written, 'close keeps the log');
+    assert.equal(closed.task.state, 'done');
     h.close();
   });
 });
@@ -516,9 +658,9 @@ describe('requeue (active -> queued)', () => {
 describe('per-project queue pause', () => {
   const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
 
-  it('fresh databases are v5 with the queue enabled', () => {
+  it('fresh databases are v6 with the queue enabled', () => {
     const { h, ws } = fresh();
-    assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 5);
+    assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
     assert.equal(h.db.prepare("SELECT queue_enabled AS q FROM workspaces WHERE id = ?").get(ws).q, 1);
     h.close();
   });
@@ -692,7 +834,7 @@ describe('per-workspace numbering', () => {
     h.close();
   });
 
-  it('v2 databases migrate to v5 with deterministic seq backfill, ids untouched', async () => {
+  it('v2 databases migrate to v6 with deterministic seq backfill, ids untouched', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -712,12 +854,14 @@ describe('per-workspace numbering', () => {
       raw.exec("INSERT INTO tasks (id, workspace_id, type, title, slug, spec, branch, state, created_at, updated_at) VALUES (1, 1, 'bug', 'A one', 'a-one', '', '', 'done', 't', 't'), (2, 2, 'bug', 'B one', 'b-one', '', '', 'done', 't', 't'), (3, 1, 'bug', 'A two', 'a-two', '', '', 'draft', 't', 't')");
       raw.exec("PRAGMA user_version = 2");
       raw.close();
-      // Reopen through the plugin: the v2->v3->v4->v5 migration runs in place.
+      // Reopen through the plugin: the v2->v3->v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 5);
-        const rows = h.db.prepare("SELECT id, workspace_id, seq FROM tasks ORDER BY id ASC").all();
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        const rows = h.db.prepare("SELECT id, workspace_id, seq, notes FROM tasks ORDER BY id ASC").all();
         assert.deepEqual(rows.map((r) => [r.id, r.workspace_id, r.seq]), [[1, 1, 1], [2, 2, 1], [3, 1, 2]]);
+        // v6 backfills the notes log of every pre-existing row with ''.
+        assert.deepEqual(rows.map((r) => r.notes), ['', '', '']);
         const idx = h.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_tasks_ws_seq'").get();
         assert.ok(idx, 'UNIQUE(workspace_id, seq) index exists');
         // v5 backfills the queue switch ON for every existing workspace.
@@ -733,7 +877,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v1 databases migrate to v5 (column rename + seq backfill + queued_at)', async () => {
+  it('v1 databases migrate to v6 (column rename + seq backfill + queued_at + notes)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -754,13 +898,14 @@ describe('per-workspace numbering', () => {
       raw.close();
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 5);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
         const row = get(h.db, 1);
         assert.equal(row.type, 'bug');
         assert.equal(row.title, 'Vecchio');
         assert.equal(row.state, 'draft');
         assert.equal(row.seq, 1);
         assert.equal(row.queued_at, null);
+        assert.equal(row.notes, '');
         assert.equal(h.db.prepare("SELECT queue_enabled AS q FROM workspaces WHERE id = 1").get().q, 1);
       } finally {
         h.close();
@@ -770,7 +915,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v3 databases migrate to v5 in place (queued_at added, rows NULL)', async () => {
+  it('v3 databases migrate to v6 in place (queued_at added, rows NULL)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -790,15 +935,17 @@ describe('per-workspace numbering', () => {
       raw.exec("INSERT INTO tasks (id, workspace_id, seq, type, title, slug, spec, branch, state, created_at, updated_at) VALUES (1, 1, 1, 'bug', 'Queued old', 'queued-old', '', '', 'queued', 't', 't')");
       raw.exec("PRAGMA user_version = 3");
       raw.close();
-      // Reopen through the plugin: the v3->v4->v5 migration runs in place.
+      // Reopen through the plugin: the v3->v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 5);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
         const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
         assert.ok(cols.some((c) => c.name === 'queued_at'), 'queued_at column exists');
+        assert.ok(cols.some((c) => c.name === 'notes'), 'notes column exists');
         const row = get(h.db, 1);
         assert.equal(row.state, 'queued');
         assert.equal(row.queued_at, null);
+        assert.equal(row.notes, '');
         assert.equal(h.db.prepare("SELECT queue_enabled AS q FROM workspaces WHERE id = 1").get().q, 1);
       } finally {
         h.close();
@@ -808,7 +955,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v4 databases migrate to v5 in place (queue_enabled backfilled to 1)', async () => {
+  it('v4 databases migrate to v6 in place (queue_enabled backfilled to 1)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -828,10 +975,10 @@ describe('per-workspace numbering', () => {
       raw.exec("INSERT INTO tasks (id, workspace_id, seq, type, title, slug, spec, branch, state, created_at, updated_at, queued_at) VALUES (1, 1, 1, 'bug', 'Waiting', 'waiting', '', '', 'queued', 't', 't', '2026-01-01T00:00:00.000Z')");
       raw.exec("PRAGMA user_version = 4");
       raw.close();
-      // Reopen through the plugin: the v4->v5 migration runs in place.
+      // Reopen through the plugin: the v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 5);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
         const cols = h.db.prepare("PRAGMA table_info(workspaces)").all();
         assert.ok(cols.some((c) => c.name === 'queue_enabled'), 'queue_enabled column exists');
         // Every pre-existing workspace keeps the automatic behavior.
@@ -841,6 +988,55 @@ describe('per-workspace numbering', () => {
         const row = get(h.db, 1);
         assert.equal(row.state, 'queued');
         assert.equal(row.queued_at, '2026-01-01T00:00:00.000Z');
+        assert.equal(row.notes, '');
+      } finally {
+        h.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('v5 databases migrate to v6 in place (notes column backfilled with empty logs)', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { DatabaseSync } = await import('node:sqlite');
+    const { openDatabase } = await import('../lib/db.js');
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tasks-v5-'));
+    const path = join(dir, 'tasks.db');
+    try {
+      // Faithful v5 layout: queue_enabled + queued_at present, no notes column.
+      const raw = new DatabaseSync(path);
+      raw.exec("PRAGMA application_id = 2003397999");
+      raw.exec("CREATE TABLE workspaces (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, base_branch TEXT NOT NULL DEFAULT '', queue_enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+      raw.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, slug TEXT NOT NULL, spec TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft', worker_session TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT, close_reason TEXT, queued_at TEXT)");
+      raw.exec("CREATE INDEX idx_tasks_ws_state ON tasks(workspace_id, state)");
+      raw.exec("CREATE UNIQUE INDEX idx_tasks_ws_seq ON tasks(workspace_id, seq)");
+      raw.exec("INSERT INTO workspaces (id, path, base_branch, queue_enabled, created_at, updated_at) VALUES (1, 'C:/a', '', 0, 't', 't'), (2, 'C:/b', '', 1, 't', 't')");
+      raw.exec("INSERT INTO tasks (id, workspace_id, seq, type, title, slug, spec, branch, state, created_at, updated_at, queued_at) VALUES (1, 1, 1, 'bug', 'Held back', 'held-back', 'paused project', 'task/1-held-back', 'active', 't', 't', '2026-02-02T00:00:00.000Z'), (2, 1, 2, 'chore', 'Later', 'later', '', '', 'queued', 't', 't', '2026-02-03T00:00:00.000Z')");
+      raw.exec("PRAGMA user_version = 5");
+      raw.close();
+      // Reopen through the plugin: only the v5->v6 step runs.
+      const h = openDatabase({ path });
+      try {
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
+        assert.ok(cols.some((c) => c.name === 'notes'), 'notes column exists');
+        // Every pre-existing row reads as "no notes" (NOT NULL DEFAULT '').
+        const rows = h.db.prepare("SELECT id, notes FROM tasks ORDER BY id ASC").all();
+        assert.deepEqual(rows.map((r) => [r.id, r.notes]), [[1, ''], [2, '']]);
+        // The other columns keep their values, the queue switch included.
+        const one = get(h.db, 1);
+        assert.equal(one.title, 'Held back');
+        assert.equal(one.state, 'active');
+        assert.equal(one.branch, 'task/1-held-back');
+        assert.equal(one.queued_at, '2026-02-02T00:00:00.000Z');
+        assert.equal(queueEnabled(h.db, 1), false);
+        assert.equal(queueEnabled(h.db, 2), true);
+        // The migrated row accepts notes like any other (no NULL handling).
+        const noted = appendNote(h.db, 1, 'migrated and annotatable');
+        assert.match(noted.notes, /^- \[.+\] migrated and annotatable$/);
       } finally {
         h.close();
       }
