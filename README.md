@@ -35,6 +35,14 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   reports the conflicting files, and waits: the task stays open, no
   --theirs/--ours, no hand resolutions, no force on base. When `false`
   the human merges outside and the worker never touches base.
+- Per-project queue switch (Tasks panel header, `workspaces.queue_enabled`,
+  default ON): OFF pauses the project, so `approve` only moves the draft to
+  `queued` — no promotion, no spawn — and closing the active task leaves the
+  next one asleep. Each queued card then shows a **Start** button that
+  promotes exactly that task (branch assigned with the usual clash suffix)
+  and spawns its worker; the switch is per project, so repo-a can stay paused
+  while repo-b keeps advancing. Switching back ON promotes the FIFO head when
+  the slot is free.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
 - Everything is English: tool fields (`type/title/state/outcome`), presets,
   panel, prompts, and specs.
