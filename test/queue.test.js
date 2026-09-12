@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, queueEnabled, resolveTask, search, setQueueEnabled, slugify, startTask } from '../lib/queue.js';
+import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, queueEnabled, resolveTask, search, setQueueEnabled, slugify, startTask } from '../lib/queue.js';
 
 function fresh() { const h = openMemory(); const ws = ensureWorkspace(h.db, 'C:/repo'); return { h, ws }; }
 
@@ -176,6 +176,122 @@ describe('queue', () => {
     assert.equal(codeOf(() => search(h.db, ws, '')), 'bad-query');
     assert.equal(codeOf(() => search(h.db, ws, 'x', 'nope')), 'bad-state');
     assert.equal(codeOf(() => search(h.db, ws, 'x', undefined, 0)), 'bad-limit');
+    h.close();
+  });
+});
+
+// Panel reorder (▲/▼): the queued order is derived from queued_at, so a move
+// rewrites the stamps of the whole queue and never promotes anything.
+describe('queued reordering (panel move up/down)', () => {
+  const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
+  // Three queued rows in approval order one -> two -> three (paused queue:
+  // the slot is free, so an automatic project would promote the head).
+  function threeQueued() {
+    const { h, ws } = fresh();
+    setQueueEnabled(h.db, ws, false);
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One' });
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two' });
+    const three = enqueue(h.db, ws, { type: 'bug', title: 'Three' });
+    approve(h.db, one.id); approve(h.db, two.id); approve(h.db, three.id);
+    return { h, ws, one, two, three };
+  }
+  const idsOf = (h, ws) => list(h.db, ws, 'queued').map((t) => t.id);
+
+  it('moves a task one slot up/down and re-stamps the whole queue', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    assert.deepEqual(idsOf(h, ws), [one.id, two.id, three.id]);
+    const up = moveQueued(h.db, ws, three.id, 'up');
+    assert.equal(up.moved, true);
+    assert.equal(up.task.id, three.id);
+    assert.deepEqual(up.queued.map((t) => t.id), [one.id, three.id, two.id]);
+    assert.deepEqual(idsOf(h, ws), [one.id, three.id, two.id]);
+    const down = moveQueued(h.db, ws, one.id, 'down');
+    assert.equal(down.moved, true);
+    assert.deepEqual(idsOf(h, ws), [three.id, one.id, two.id]);
+    h.close();
+  });
+
+  it('keeps the stamps distinct, strictly increasing, and above the old max', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    const before = list(h.db, ws, 'queued').map((t) => t.queued_at);
+    const oldMax = before.reduce((a, b) => (a > b ? a : b));
+    const out = moveQueued(h.db, ws, two.id, 'up');
+    const stamps = out.queued.map((t) => t.queued_at);
+    assert.deepEqual(stamps, [...stamps].sort(), 'stamps read in ascending order');
+    assert.equal(new Set(stamps).size, stamps.length, 'no two rows share a stamp');
+    for (const stamp of stamps) assert.ok(stamp > oldMax, 'every fresh stamp beats the old workspace max');
+    h.close();
+  });
+
+  it('edge calls are a no-op that mutates nothing', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    const snapshot = () => list(h.db, ws, 'queued').map((t) => [t.id, t.queued_at, t.updated_at]);
+    const before = snapshot();
+    const head = moveQueued(h.db, ws, one.id, 'up');
+    assert.equal(head.moved, false);
+    assert.equal(head.task.id, one.id);
+    assert.deepEqual(head.queued.map((t) => t.id), [one.id, two.id, three.id]);
+    const tail = moveQueued(h.db, ws, three.id, 'down');
+    assert.equal(tail.moved, false);
+    assert.deepEqual(tail.queued.map((t) => t.id), [one.id, two.id, three.id]);
+    assert.deepEqual(snapshot(), before, 'no row changed');
+    h.close();
+  });
+
+  it('a reorder decides who starts next when the queue resumes', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    moveQueued(h.db, ws, two.id, 'up'); // two jumps ahead of one
+    const resumed = setQueueEnabled(h.db, ws, true);
+    assert.equal(resumed.promoted.id, two.id);
+    assert.equal(get(h.db, two.id).state, 'active');
+    assert.deepEqual(idsOf(h, ws), [one.id, three.id]);
+    h.close();
+  });
+
+  it('an approval AFTER a reorder still lands at the end of the queue', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    moveQueued(h.db, ws, three.id, 'up');
+    const four = enqueue(h.db, ws, { type: 'chore', title: 'Four' });
+    approve(h.db, four.id);
+    assert.deepEqual(idsOf(h, ws), [one.id, three.id, two.id, four.id]);
+    h.close();
+  });
+
+  it('never promotes while another task is active', () => {
+    const { h, ws } = fresh();
+    const blocker = enqueue(h.db, ws, { type: 'bug', title: 'Blocker' });
+    approve(h.db, blocker.id); // active: the slot is taken
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One' });
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two' });
+    approve(h.db, one.id); approve(h.db, two.id);
+    const out = moveQueued(h.db, ws, two.id, 'up');
+    assert.equal(out.moved, true);
+    assert.deepEqual(idsOf(h, ws), [two.id, one.id]);
+    assert.equal(get(h.db, blocker.id).state, 'active');
+    assert.equal(list(h.db, ws, 'active').length, 1);
+    assert.equal(get(h.db, two.id).state, 'queued');
+    h.close();
+  });
+
+  it('rejects a non-queued row, a bad direction, and an unknown id', () => {
+    const { h, ws, one, two } = threeQueued();
+    const draft = enqueue(h.db, ws, { type: 'bug', title: 'Draft' });
+    assert.equal(codeOf(() => moveQueued(h.db, ws, draft.id, 'up')), 'bad-state');
+    // Active: the first task in a paused project can be started by hand.
+    startTask(h.db, ws, one.id);
+    assert.equal(codeOf(() => moveQueued(h.db, ws, one.id, 'up')), 'bad-state');
+    assert.equal(codeOf(() => moveQueued(h.db, ws, two.id, 'top')), 'bad-direction');
+    assert.equal(codeOf(() => moveQueued(h.db, ws, two.id, undefined)), 'bad-direction');
+    assert.equal(codeOf(() => moveQueued(h.db, ws, 9999, 'up')), 'not-found');
+    assert.equal(get(h.db, two.id).state, 'queued');
+    h.close();
+  });
+
+  it('a cross-workspace id reads not-found and mutates nothing', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    const ws2 = ensureWorkspace(h.db, 'C:/other');
+    assert.equal(codeOf(() => moveQueued(h.db, ws2, one.id, 'down')), 'not-found');
+    assert.deepEqual(idsOf(h, ws), [one.id, two.id, three.id]);
     h.close();
   });
 });
