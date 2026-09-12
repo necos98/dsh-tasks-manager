@@ -1,9 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { enqueue, ensureWorkspace } from '../lib/queue.js';
+import { approve, enqueue, ensureWorkspace, get } from '../lib/queue.js';
 import { createWebHandlers, routeWebCall } from '../lib/web.js';
-import { approve } from '../lib/queue.js';
 
 // Mock store: in-memory DB + two-workspace registry. No DSH boot needed.
 function mockStore() {
@@ -207,5 +206,120 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.value.promoted.id, two.id);
     assert.equal(out.value.promoted.state, 'active');
     assert.match(out.value.spawn.error, /agents service unavailable/);
+  });
+});
+
+describe('web RPC queue switch (panel channel)', () => {
+  it('snapshot exposes queueEnabled, defaulting to true', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store);
+    const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.queueEnabled, true);
+  });
+
+  it('setQueueEnabled toggles the flag and refuses a non-boolean', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store);
+    const off = await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: false });
+    assert.equal(off.ok, true);
+    assert.equal(off.value.queueEnabled, false);
+    assert.equal(off.value.promoted, null);
+    assert.equal(off.value.task, null);
+    const snapOff = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snapOff.value.queueEnabled, false);
+    const on = await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: true });
+    assert.equal(on.ok, true);
+    assert.equal(on.value.queueEnabled, true);
+    const bad = await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: 'yes' });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.error.code, 'bad-enabled');
+    assert.equal((await routeWebCall(handlers, 'setQueueEnabled', { enabled: false })).ok, false);
+  });
+
+  it('paused project: approve queues without spawning, start promotes and spawns', async () => {
+    const { store } = mockStore();
+    const spawned = [];
+    const handlers = createWebHandlers(store, {
+      ctx: { fake: true },
+      spawnWorker: async ({ task }) => { spawned.push(task.id); return { sessionId: 'sess-worker-' + task.id }; },
+    });
+    await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: false });
+    const row = enqueue(store.getDb(), 1, { type: 'feature', title: 'Manual start', spec: '' });
+    const approved = await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: row.id });
+    assert.equal(approved.ok, true);
+    assert.equal(approved.value.task.state, 'queued');
+    assert.equal(approved.value.promoted, null);
+    assert.deepEqual(spawned, [], 'a paused approve never spawns');
+    const out = await routeWebCall(handlers, 'start', { sessionId: 'sess-a', id: row.id });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.state, 'active');
+    assert.equal(out.value.promoted.id, row.id);
+    assert.equal(out.value.queueEnabled, false);
+    assert.deepEqual(spawned, [row.id]);
+    assert.deepEqual(out.value.spawn, { sessionId: 'sess-worker-' + row.id });
+  });
+
+  it('setQueueEnabled(true) promotes the FIFO head over the channel', async () => {
+    const { store } = mockStore();
+    const spawned = [];
+    const handlers = createWebHandlers(store, {
+      ctx: { fake: true },
+      spawnWorker: async ({ task }) => { spawned.push(task.id); return { sessionId: 'sess-worker-' + task.id }; },
+    });
+    await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: false });
+    const first = enqueue(store.getDb(), 1, { type: 'bug', title: 'First', spec: '' });
+    const second = enqueue(store.getDb(), 1, { type: 'bug', title: 'Second', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: first.id });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: second.id });
+    const out = await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: true });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.promoted.id, first.id);
+    assert.equal(out.value.task.id, first.id);
+    assert.equal(out.value.task.state, 'active');
+    assert.deepEqual(spawned, [first.id]);
+  });
+
+  it('start refuses a non-queued row and a busy slot', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store);
+    const draft = enqueue(store.getDb(), 1, { type: 'bug', title: 'Draft', spec: '' });
+    const bad = await routeWebCall(handlers, 'start', { sessionId: 'sess-a', id: draft.id });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.error.code, 'bad-state');
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: draft.id });
+    const one = enqueue(store.getDb(), 1, { type: 'bug', title: 'One', spec: '' });
+    const two = enqueue(store.getDb(), 1, { type: 'bug', title: 'Two', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: one.id });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: two.id });
+    const busy = await routeWebCall(handlers, 'start', { sessionId: 'sess-a', id: two.id });
+    assert.equal(busy.ok, false);
+    assert.equal(busy.error.code, 'slot-busy');
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap.value.tasks.find((t) => t.id === two.id).state, 'queued');
+  });
+
+  it('cross-workspace start and setQueueEnabled touch nothing', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const blocker = enqueue(h.db, wsA, { type: 'bug', title: 'Mine', spec: '' });
+    approve(h.db, blocker.id);
+    const waiting = enqueue(h.db, wsA, { type: 'bug', title: 'Next', spec: '' });
+    approve(h.db, waiting.id); // stays queued: repo-a's slot is busy
+    // sess-b belongs to repo-b: the repo-a number does not resolve there.
+    const out = await routeWebCall(handlers, 'start', { sessionId: 'sess-b', id: waiting.id });
+    assert.equal(out.ok, false);
+    assert.equal(out.error.code, 'not-found');
+    assert.equal(get(h.db, waiting.id).state, 'queued');
+    // The switch is per project: sess-b pausing leaves repo-a automatic.
+    const off = await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-b', enabled: false });
+    assert.equal(off.ok, true);
+    const snapA = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snapA.value.queueEnabled, true);
+    // In repo-a the slot is taken by the blocker, so its own start rejects.
+    const busy = await routeWebCall(handlers, 'start', { sessionId: 'sess-a', id: waiting.id });
+    assert.equal(busy.ok, false);
+    assert.equal(busy.error.code, 'slot-busy');
+    h.close();
   });
 });
