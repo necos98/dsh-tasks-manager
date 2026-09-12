@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, enqueue, ensureWorkspace, get } from '../lib/queue.js';
+import { approve, editDraft, enqueue, ensureWorkspace, get } from '../lib/queue.js';
 import { createWebHandlers, routeWebCall } from '../lib/web.js';
 
 // Mock store: in-memory DB + two-workspace registry. No DSH boot needed.
@@ -287,6 +287,95 @@ describe('web RPC queued reorder (panel channel)', () => {
     const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'queued').map((t) => t.id), [one.id, two.id]);
     assert.equal(get(h.db, draft.id).state, 'draft');
+    h.close();
+  });
+});
+
+describe('web RPC unqueue (panel channel)', () => {
+  // Paused project so approvals queue instead of promoting the head.
+  async function queued(handlers, h, ws, titles) {
+    await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: false });
+    const rows = titles.map((title) => enqueue(h.db, ws, { type: 'bug', title, spec: '' }));
+    for (const row of rows) await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: row.id });
+    return rows;
+  }
+
+  it('puts a queued task back to draft, promoting nothing and spawning nobody', async () => {
+    const { h, store, wsA } = mockStore();
+    const spawned = [];
+    const handlers = createWebHandlers(store, {
+      ctx: { fake: true },
+      spawnWorker: async ({ task }) => { spawned.push(task.id); return { sessionId: 'sess-worker-' + task.id }; },
+    });
+    const [one, two, three] = await queued(handlers, h, wsA, ['One', 'Two', 'Three']);
+    const out = await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-a', id: two.id });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, two.id);
+    assert.equal(out.value.task.state, 'draft');
+    assert.equal(out.value.task.queued_at, null);
+    assert.equal(out.value.task.branch, '');
+    assert.equal(out.value.promoted, null);
+    assert.equal(out.value.queueEnabled, false);
+    assert.equal(out.value.spawn, undefined, 'a revert never spawns a worker');
+    assert.deepEqual(spawned, []);
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'queued').map((t) => t.id), [one.id, three.id]);
+    assert.equal(snap.value.tasks.filter((t) => t.state === 'active').length, 0);
+    const draftRow = snap.value.tasks.find((t) => t.id === two.id);
+    assert.equal(draftRow.state, 'draft');
+    h.close();
+  });
+
+  it('leaves an active row untouched', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const blocker = enqueue(h.db, wsA, { type: 'bug', title: 'Blocker', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: blocker.id }); // active
+    const [one, two] = await queued(handlers, h, wsA, ['One', 'Two']);
+    const out = await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-a', id: two.id });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.state, 'draft');
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(get(h.db, blocker.id).state, 'active');
+    assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'active').map((t) => t.id), [blocker.id]);
+    assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'queued').map((t) => t.id), [one.id]);
+    h.close();
+  });
+
+  it('cross-workspace and non-queued ids fail closed without mutating', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const [one, two] = await queued(handlers, h, wsA, ['One', 'Two']);
+    const cross = await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-b', id: one.id });
+    assert.equal(cross.ok, false);
+    assert.equal(cross.error.code, 'not-found');
+    const draft = enqueue(h.db, wsA, { type: 'bug', title: 'Still a draft', spec: '' });
+    const notQueued = await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-a', id: draft.id });
+    assert.equal(notQueued.ok, false);
+    assert.equal(notQueued.error.code, 'bad-state');
+    const badId = await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-a' });
+    assert.equal(badId.ok, false);
+    assert.equal(badId.error.code, 'bad-id');
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'queued').map((t) => t.id), [one.id, two.id]);
+    assert.notEqual(get(h.db, one.id).queued_at, null);
+    assert.equal(get(h.db, draft.id).state, 'draft');
+    h.close();
+  });
+
+  it('the reverted task can be revised and re-enters at the end of the FIFO', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const [one, two, three] = await queued(handlers, h, wsA, ['One', 'Two', 'Three']);
+    await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-a', id: one.id });
+    // Editable again through the same channel the intake uses (queue domain).
+    const revised = editDraft(h.db, one.id, { title: 'One revised', spec: 'now editable' });
+    assert.equal(revised.state, 'draft');
+    const again = await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: one.id });
+    assert.equal(again.ok, true);
+    assert.equal(again.value.task.state, 'queued');
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'queued').map((t) => t.id), [two.id, three.id, one.id]);
     h.close();
   });
 });
