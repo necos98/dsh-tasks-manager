@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, queueEnabled, resolveTask, search, setQueueEnabled, slugify, startTask } from '../lib/queue.js';
+import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, queueEnabled, resolveTask, search, setQueueEnabled, slugify, startTask, unqueue } from '../lib/queue.js';
 
 function fresh() { const h = openMemory(); const ws = ensureWorkspace(h.db, 'C:/repo'); return { h, ws }; }
 
@@ -292,6 +292,107 @@ describe('queued reordering (panel move up/down)', () => {
     const ws2 = ensureWorkspace(h.db, 'C:/other');
     assert.equal(codeOf(() => moveQueued(h.db, ws2, one.id, 'down')), 'not-found');
     assert.deepEqual(idsOf(h, ws), [one.id, two.id, three.id]);
+    h.close();
+  });
+});
+
+// The inverse of approve(): queued -> draft, so a queued task can be revised
+// again instead of only closed. A pure state reset that never promotes.
+describe('unqueue (queued -> draft)', () => {
+  const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
+  // Paused project, three queued rows in approval order one -> two -> three
+  // (an automatic project would promote the head and take the slot).
+  function threeQueued() {
+    const { h, ws } = fresh();
+    setQueueEnabled(h.db, ws, false);
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One' });
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two', spec: 'keep me' });
+    const three = enqueue(h.db, ws, { type: 'bug', title: 'Three' });
+    approve(h.db, one.id); approve(h.db, two.id); approve(h.db, three.id);
+    return { h, ws, one, two, three };
+  }
+
+  it('resets state and queued_at, keeps seq/slug/spec, promotes nothing', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    const before = get(h.db, two.id);
+    const out = unqueue(h.db, two.id);
+    assert.equal(out.promoted, null);
+    assert.equal(out.task.state, 'draft');
+    assert.equal(out.task.queued_at, null);
+    assert.equal(out.task.seq, before.seq);
+    assert.equal(out.task.slug, before.slug);
+    assert.equal(out.task.spec, 'keep me');
+    assert.equal(out.task.created_at, before.created_at);
+    assert.equal(out.task.branch, '');
+    assert.ok(out.task.updated_at >= before.updated_at);
+    // Nothing was closed and the other rows keep their place.
+    assert.equal(out.task.closed_at, null);
+    assert.equal(out.task.close_reason, null);
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [one.id, three.id]);
+    assert.equal(list(h.db, ws, 'active').length, 0);
+    h.close();
+  });
+
+  it('never promotes: a free slot stays free', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    unqueue(h.db, one.id);
+    assert.equal(list(h.db, ws, 'active').length, 0);
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [two.id, three.id]);
+    // Resuming still promotes the head, i.e. the queue is intact.
+    const resumed = setQueueEnabled(h.db, ws, true);
+    assert.equal(resumed.promoted.id, two.id);
+    h.close();
+  });
+
+  it('leaves an active row untouched when the slot is taken', () => {
+    const { h, ws } = fresh();
+    const blocker = enqueue(h.db, ws, { type: 'bug', title: 'Blocker' });
+    approve(h.db, blocker.id); // active
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One' });
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two' });
+    approve(h.db, one.id); approve(h.db, two.id);
+    const out = unqueue(h.db, two.id);
+    assert.equal(out.task.state, 'draft');
+    assert.equal(get(h.db, blocker.id).state, 'active');
+    assert.equal(get(h.db, one.id).state, 'queued');
+    assert.equal(list(h.db, ws, 'active').length, 1);
+    h.close();
+  });
+
+  it('makes the task editable again (editDraft stops throwing bad-state)', () => {
+    const { h, ws, two } = threeQueued();
+    assert.equal(codeOf(() => editDraft(h.db, two.id, { title: 'Nope' })), 'bad-state');
+    unqueue(h.db, two.id);
+    const revised = editDraft(h.db, two.id, { title: 'Two revised', spec: 'new spec' });
+    assert.equal(revised.title, 'Two revised');
+    assert.equal(revised.slug, 'two-revised');
+    assert.equal(revised.spec, 'new spec');
+    assert.equal(revised.state, 'draft');
+    h.close();
+  });
+
+  it('re-approving lands the task at the END of the queue', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    unqueue(h.db, one.id); // was the head
+    approve(h.db, one.id);
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [two.id, three.id, one.id]);
+    h.close();
+  });
+
+  it('rejects draft, active, closed, and unknown ids without mutating', () => {
+    const { h, ws, one, two, three } = threeQueued();
+    const draft = enqueue(h.db, ws, { type: 'bug', title: 'Draft' });
+    assert.equal(codeOf(() => unqueue(h.db, draft.id)), 'bad-state');
+    startTask(h.db, ws, two.id);
+    assert.equal(codeOf(() => unqueue(h.db, two.id)), 'bad-state');
+    close(h.db, three.id, 'done');
+    assert.equal(codeOf(() => unqueue(h.db, three.id)), 'bad-state');
+    assert.equal(codeOf(() => unqueue(h.db, 9999)), 'not-found');
+    assert.equal(get(h.db, draft.id).state, 'draft');
+    assert.equal(get(h.db, two.id).state, 'active');
+    assert.equal(get(h.db, three.id).state, 'done');
+    assert.equal(get(h.db, three.id).close_reason, 'done');
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [one.id]);
     h.close();
   });
 });
