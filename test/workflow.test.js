@@ -16,7 +16,7 @@ describe('workflow on the real host', () => {
 
   it('manual mode hides finish_task by default (workerCanFinish:false)', () => {
     assert.deepEqual(toolNames(host.ctx), [
-      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
   });
 
@@ -26,11 +26,11 @@ describe('workflow on the real host', () => {
     const settings = host.ctx.get('settings');
     settings.publish({ tasks: { workerCanFinish: true } });
     assert.deepEqual(toolNames(host.ctx), [
-      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
     settings.publish({ tasks: { workerCanFinish: false } });
     assert.deepEqual(toolNames(host.ctx), [
-      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'search_tasks', 'task_detail',
+      'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
   });
 
@@ -138,6 +138,41 @@ describe('workflow on the real host', () => {
       assert.equal(detail.value.state, 'active');
     } finally {
       await fifo.dispose();
+    }
+  });
+
+  it('worker notes survive the whole cycle: enqueue -> approve -> note -> close', async () => {
+    // Real pipeline: tools.get visibility, defineTool arg checks,
+    // createSuccessResult output-schema validation (TASK_SCHEMA now carries
+    // notes) and render. Manual mode: the worker may still annotate.
+    const rt = await bootHost({
+      workspaces: [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-user', 'sess-worker'] }],
+    });
+    try {
+      const filed = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Annotated' });
+      assert.equal(filed.value.notes, '');
+      await callTool(rt.ctx, 'sess-user', 'approve_task', { id: filed.value.id });
+      await callTool(rt.ctx, 'sess-worker', 'get_my_task', {}); // binds
+      const noted = await callTool(rt.ctx, 'sess-worker', 'note_task', { text: 'flagged: no id parameter for note_task' });
+      assert.match(noted.value.notes, /^- \[.+\] flagged: no id parameter for note_task$/);
+      assert.equal(noted.value.state, 'active');
+      assert.match(noted.content[0].text, /\| notes: 1$/);
+      const detail = await callTool(rt.ctx, 'sess-user', 'task_detail', { id: filed.value.id });
+      assert.equal(JSON.parse(detail.content[0].text).notes, noted.value.notes);
+      // A note never moves the queue: the same task is still the active one.
+      const listed = await callTool(rt.ctx, 'sess-user', 'list_tasks', { state: 'active' });
+      assert.equal(listed.value.length, 1);
+      assert.equal(listed.value[0].id, filed.value.id);
+      const closed = await callTool(rt.ctx, 'sess-user', 'close_task', { id: filed.value.id, outcome: 'done' });
+      assert.equal(closed.value.task.state, 'done');
+      assert.equal(closed.value.task.notes, noted.value.notes, 'the log survives the close');
+      // Closed rows are read-only for the worker: no note lands afterwards.
+      await assert.rejects(
+        () => callTool(rt.ctx, 'sess-worker', 'note_task', { text: 'too late' }),
+        /no active task bound/,
+      );
+    } finally {
+      await rt.dispose();
     }
   });
 
