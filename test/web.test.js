@@ -579,3 +579,172 @@ describe('web RPC queue switch (panel channel)', () => {
     h.close();
   });
 });
+
+// The reported bug: in a DB where a workspace's internal ids have diverged from
+// its per-workspace seq, the panel addressed a card by the internal id and the
+// server resolved that number to whatever OTHER row carried it as a seq. The
+// panel now sends the visible #N (task.seq), which is what these tests send.
+describe('web RPC with diverged ids and seqs (panel addressing)', () => {
+  // Two filler rows in repo-b push repo-a's ids above its seqs, so every
+  // repo-a row has id = seq + 2. rows.get('a3') then reads naturally.
+  function divergentStore() {
+    const h = openMemory();
+    const wsA = ensureWorkspace(h.db, 'C:/repo-a');
+    const wsB = ensureWorkspace(h.db, 'C:/repo-b');
+    const store = {
+      getDb() { return h.db; },
+      workspaceRegistry: {
+        list() {
+          return [
+            { id: 'a', path: 'C:/repo-a', title: 'repo-a', sessionIds: ['sess-a'] },
+            { id: 'b', path: 'C:/repo-b', title: 'repo-b', sessionIds: ['sess-b'] },
+          ];
+        },
+      },
+    };
+    // Spawner: binds the session so a promotion looks like the real host.
+    const handlers = createWebHandlers(store, {
+      ctx: { fake: true },
+      spawnWorker: async ({ task }) => {
+        const { bindSession } = await import('../lib/queue.js');
+        bindSession(h.db, task.id, 'sess-worker-' + task.seq);
+        return { sessionId: 'sess-worker-' + task.seq };
+      },
+    });
+    for (const title of ['Filler one', 'Filler two']) {
+      enqueue(h.db, wsB, { type: 'bug', title, spec: '' });
+    }
+    const rows = new Map();
+    for (const title of ['Alpha', 'Beta', 'Gamma', 'Delta']) {
+      const row = enqueue(h.db, wsA, { type: 'bug', title, spec: '' });
+      rows.set(title.toLowerCase(), row);
+    }
+    return { h, store, handlers, wsA, wsB, rows };
+  }
+
+  it('fixture really diverges (id = seq + 2 in repo-a)', () => {
+    const { h, rows } = divergentStore();
+    const a = rows.get('alpha');
+    const d = rows.get('delta');
+    assert.deepEqual([a.id, a.seq, d.id, d.seq], [3, 1, 6, 4]);
+    h.close();
+  });
+
+  it('approve acts on the card whose #N was sent, never the id twin', async () => {
+    const { h, handlers, rows } = divergentStore();
+    const alpha = rows.get('alpha'); // id 3, seq 1
+    const gamma = rows.get('gamma'); // id 5, seq 3
+    // #3 is alpha's internal id and gamma's visible seq: gamma must win.
+    const out = await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: gamma.seq });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, gamma.id);
+    assert.equal(out.value.task.title, 'Gamma');
+    assert.equal(out.value.promoted.id, gamma.id);
+    assert.deepEqual(out.value.spawn, { sessionId: 'sess-worker-3' });
+    assert.equal(get(h.db, alpha.id).state, 'draft');
+    h.close();
+  });
+
+  it('close acts on the card whose #N was sent', async () => {
+    const { h, handlers, rows } = divergentStore();
+    const alpha = rows.get('alpha'); // id 3, seq 1
+    const gamma = rows.get('gamma'); // id 5, seq 3
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: gamma.seq });
+    const out = await routeWebCall(handlers, 'close', { sessionId: 'sess-a', id: gamma.seq, outcome: 'done' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, gamma.id);
+    assert.equal(out.value.task.state, 'done');
+    assert.equal(get(h.db, alpha.id).state, 'draft');
+    h.close();
+  });
+
+  it('unqueue acts on the queued card whose #N was sent', async () => {
+    const { h, handlers, rows } = divergentStore();
+    const alpha = rows.get('alpha'); // slot holder, id 3, seq 1
+    const gamma = rows.get('gamma'); // id 5, seq 3 -> queued behind alpha
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: alpha.seq });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: gamma.seq });
+    assert.equal(get(h.db, gamma.id).state, 'queued');
+    const out = await routeWebCall(handlers, 'unqueue', { sessionId: 'sess-a', id: gamma.seq });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, gamma.id);
+    assert.equal(get(h.db, gamma.id).state, 'draft');
+    // alpha keeps the slot: the wrong row was not pulled out.
+    assert.equal(get(h.db, alpha.id).state, 'active');
+    h.close();
+  });
+
+  it('move acts on the queued card whose #N was sent', async () => {
+    const { h, handlers, rows } = divergentStore();
+    const alpha = rows.get('alpha'); // slot holder
+    const beta = rows.get('beta'); // id 4, seq 2
+    const gamma = rows.get('gamma'); // id 5, seq 3
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: alpha.seq });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: beta.seq });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: gamma.seq });
+    // Queued order is [beta, gamma]: move #3 (gamma) up.
+    const out = await routeWebCall(handlers, 'move', { sessionId: 'sess-a', id: gamma.seq, direction: 'up' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, gamma.id);
+    const listed = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    const queued = listed.value.tasks.filter((t) => t.state === 'queued');
+    assert.deepEqual(queued.map((t) => t.title), ['Gamma', 'Beta']);
+    h.close();
+  });
+
+  it('requeue acts on the active card whose #N was sent', async () => {
+    const { h, handlers, rows } = divergentStore();
+    const alpha = rows.get('alpha'); // id 3, seq 1 -> active
+    const beta = rows.get('beta'); // id 4, seq 2
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: alpha.seq });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: beta.seq });
+    const out = await routeWebCall(handlers, 'requeue', { sessionId: 'sess-a', id: alpha.seq });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, alpha.id);
+    assert.equal(out.value.task.state, 'queued');
+    // Freeing the slot promoted the FIFO head (beta), not the row whose id
+    // equals alpha's seq.
+    assert.equal(get(h.db, beta.id).state, 'active');
+    h.close();
+  });
+
+  it('start promotes the queued card whose #N was sent (paused project)', async () => {
+    const { h, handlers, rows, wsA } = divergentStore();
+    const alpha = rows.get('alpha'); // id 3, seq 1
+    const gamma = rows.get('gamma'); // id 5, seq 3
+    await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: false });
+    // Paused: approve only queues, so both rows wait.
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: gamma.seq });
+    assert.equal(get(h.db, gamma.id).state, 'queued');
+    const out = await routeWebCall(handlers, 'start', { sessionId: 'sess-a', id: gamma.seq });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, gamma.id);
+    assert.equal(get(h.db, gamma.id).state, 'active');
+    assert.equal(get(h.db, alpha.id).state, 'draft');
+    h.close();
+  });
+
+  it('a number that names no seq of the workspace still resolves by id', async () => {
+    const { h, handlers, rows } = divergentStore();
+    const delta = rows.get('delta'); // id 6, seq 4: no repo-a row has seq 6
+    const out = await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: delta.id });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, delta.id);
+    assert.equal(out.value.task.title, 'Delta');
+    h.close();
+  });
+
+  it('a repo-b number resolves to nothing in repo-a', async () => {
+    const { h, handlers, rows, wsB } = divergentStore();
+    const beta = rows.get('beta'); // repo-a row, id 4, seq 2
+    const out = await routeWebCall(handlers, 'approve', { sessionId: 'sess-b', id: beta.id });
+    assert.equal(out.ok, false);
+    assert.equal(out.error.code, 'not-found');
+    assert.equal(get(h.db, beta.id).state, 'draft');
+    // repo-b's own #1 resolves inside repo-b.
+    const b = (await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-b' })).value.tasks[0];
+    assert.equal(b.seq, 1);
+    assert.ok(b.workspace_id === wsB);
+    h.close();
+  });
+});

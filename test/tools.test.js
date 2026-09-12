@@ -148,22 +148,81 @@ describe('tool execute (structured values + render)', () => {
     h.close();
   });
 
-  it('approve/close/task_detail accept the visible seq as well as the id', async () => {
+  it('an ambiguous number hits the visible #N, not the row whose id equals it', async () => {
     const { h, store, wsA, wsB } = mockStore();
     const defs = makeToolDefinitions(store);
+    // wsB consumes the low ids, so wsA's ids and seqs diverge (the real shape
+    // of a multi-workspace DB: id != seq in every row).
     enqueue(h.db, wsB, { type: 'bug', title: 'Other workspace first' }); // global id 1
-    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine' }, execA); // id 2, seq 1
-    // Approve by visible seq (what the panel shows as #1).
-    const r = await byName(defs, 'approve_task').execute({ id: 1 }, execA);
-    assert.equal(r.task.id, v.id);
-    assert.equal(r.task.state, 'active');
-    assert.match(r.task.branch, /^task\/1-mine/);
-    // task_detail by visible seq.
-    const detail = await byName(defs, 'task_detail').execute({ id: 1 }, execA);
-    assert.equal(detail.id, v.id);
-    // Close by global id still works (back-compat).
-    const closed = await byName(defs, 'close_task').execute({ id: v.id, outcome: 'done' }, execA);
+    const first = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine' }, execA); // id 2, seq 1
+    const second = await byName(defs, 'enqueue_task').execute({ type: 'feature', title: 'Second' }, execA); // id 3, seq 2
+    assert.deepEqual([first.id, second.id], [2, 3]);
+    assert.deepEqual([first.seq, second.seq], [1, 2]);
+    // #2 is FIRST's internal id and SECOND's visible seq. Every display
+    // surface (list_tasks, search_tasks, the panel card) calls it #2 = Second,
+    // so #2 must address Second. Before the fix this returned First.
+    const detail = await byName(defs, 'task_detail').execute({ id: 2 }, execA);
+    assert.equal(detail.title, 'Second');
+    assert.equal(detail.seq, 2);
+    const edited = await byName(defs, 'edit_draft').execute({ id: 2, title: 'Second renamed' }, execA);
+    assert.equal(edited.id, second.id);
+    assert.equal(edited.title, 'Second renamed');
+    const approved = await byName(defs, 'approve_task').execute({ id: 2 }, execA);
+    assert.equal(approved.task.title, 'Second renamed');
+    assert.match(approved.task.branch, /^task\/2-second-renamed/);
+    const closed = await byName(defs, 'close_task').execute({ id: 2, outcome: 'done' }, execA);
+    assert.equal(closed.task.title, 'Second renamed');
+    // First was shadowed by the collision before the fix: it must be untouched.
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, first.id).title, 'Mine');
+    assert.equal(get(h.db, first.id).state, 'draft');
+    // list_tasks prints the same #2 the tools just addressed.
+    const listed = await byName(defs, 'list_tasks').execute({}, execA);
+    assert.match(byName(defs, 'list_tasks').output.render({}, listed)[0].text, /^#2 \[done\] Second renamed/m);
+    h.close();
+  });
+
+  it('an id beyond the workspace seq range still resolves by id (back-compat)', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    // wsB burns ids 1-3, so wsA gets id 4 / seq 1.
+    enqueue(h.db, wsB, { type: 'bug', title: 'B one' });
+    enqueue(h.db, wsB, { type: 'bug', title: 'B two' });
+    enqueue(h.db, wsB, { type: 'bug', title: 'B three' });
+    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine' }, execA);
+    assert.equal(v.id, 4);
+    assert.equal(v.seq, 1);
+    // 4 is not any seq of wsA, so the internal id resolves it (older callers).
+    const detail = await byName(defs, 'task_detail').execute({ id: 4 }, execA);
+    assert.equal(detail.title, 'Mine');
+    // The mutation path takes the same id and reaches the same row.
+    const approved = await byName(defs, 'approve_task').execute({ id: 4 }, execA);
+    assert.equal(approved.task.id, v.id);
+    assert.equal(approved.task.state, 'active');
+    const closed = await byName(defs, 'close_task').execute({ id: 4, outcome: 'done' }, execA);
     assert.equal(closed.task.state, 'done');
+    h.close();
+  });
+
+  it('task_detail renders the visible number and leaks no internal identity', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const defs = makeToolDefinitions(store);
+    enqueue(h.db, wsB, { type: 'bug', title: 'Other' }); // global id 1
+    const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Mine', spec: 'x' }, execA); // id 2, seq 1
+    assert.equal(v.id, 2);
+    const detail = byName(defs, 'task_detail');
+    const row = await detail.execute({ id: 1 }, execA);
+    // Validation still runs on the full row...
+    assert.equal(row.id, v.id);
+    const [c] = detail.output.render({ id: 1 }, row);
+    const parsed = JSON.parse(c.text);
+    // ...but the rendered text exposes the visible number only.
+    assert.equal(parsed.seq, 1);
+    assert.equal(parsed.title, 'Mine');
+    assert.equal(parsed.id, undefined);
+    assert.equal(parsed.workspace_id, undefined);
+    assert.doesNotMatch(c.text, /"id"/);
+    assert.doesNotMatch(c.text, /"workspace_id"/);
     h.close();
   });
 
