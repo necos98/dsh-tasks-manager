@@ -15,6 +15,10 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   card line / tool render suffix), with the lazy `get_my_task` bind as
   manual fallback.
   `close_task(id, outcome)` with `done|cancelled|failed` frees the slot.
+  Every number a tool or the panel accepts is the task's VISIBLE number
+  (`#N` = this workspace's `seq`, the one printed by `list_tasks`, the panel
+  card and the worker chat title); the internal row id is a fallback and
+  resolves only when no task of that workspace carries the number.
 - The worker reads its task with `get_my_task` (spawn already binds the
   session), works on `task/<seq>-<slug>` (per-workspace visible number) in the user checkout, pushes, reports ready.
 - Finish mode (`tasks.workerCanFinish` setting, default `false` = manual):

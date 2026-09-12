@@ -656,25 +656,39 @@ describe('per-workspace numbering', () => {
     const ws2 = ensureWorkspace(h.db, 'C:/other');
     enqueue(h.db, ws2, { type: 'bug', title: 'Other first' }); // global id 1, seq 1 in ws2
     const mine = enqueue(h.db, ws, { type: 'bug', title: 'Mine' }); // global id 2, seq 1 in ws
-    // By global id (back-compat) and by visible seq (what the panel shows).
-    assert.equal(resolveTask(h.db, ws, mine.id).title, 'Mine');
+    // By the visible seq (what the panel shows)...
     assert.equal(resolveTask(h.db, ws, 1).title, 'Mine');
+    // ...and by global id when no row of ws carries that seq (back-compat).
+    assert.equal(resolveTask(h.db, ws, mine.id).title, 'Mine');
     // Cross-workspace numbers never resolve: id 1 belongs to ws2, and ws has no seq 99.
     assert.equal(resolveTask(h.db, ws, 99), null);
     assert.equal(resolveTask(h.db, ws2, mine.id), null);
     h.close();
   });
 
-  it('ambiguous numbers prefer the global id (back-compat precedence)', () => {
-    const { h, ws } = fresh();
+  it('an ambiguous number resolves to the visible seq, not the internal id', () => {
+    const { h, ws } = fresh(); // ws = 'C:/repo' (id 1)
     const ws2 = ensureWorkspace(h.db, 'C:/other');
-    enqueue(h.db, ws2, { type: 'bug', title: 'Other' }); // global id 1
+    // ws2 consumes a low id, so ws ids and seqs diverge as in a real DB.
+    enqueue(h.db, ws2, { type: 'bug', title: 'Other' }); // global id 1, in ws2
     const first = enqueue(h.db, ws, { type: 'bug', title: 'First' }); // global id 2, seq 1
     const second = enqueue(h.db, ws, { type: 'bug', title: 'Second' }); // global id 3, seq 2
-    // 2 is both first's global id and second's visible seq: the id wins, so
-    // every number that ever worked keeps resolving to the same row.
-    assert.equal(resolveTask(h.db, ws, 2).id, first.id);
-    assert.equal(resolveTask(h.db, ws, 3).id, second.id);
+    const third = enqueue(h.db, ws, { type: 'bug', title: 'Third' }); // global id 4, seq 3
+    assert.deepEqual([first.id, second.id, third.id], [2, 3, 4]);
+    assert.deepEqual([first.seq, second.seq, third.seq], [1, 2, 3]);
+    // Number 3 is second's internal id AND third's visible seq: the visible
+    // number wins, because #3 is what list_tasks and the panel print for third.
+    assert.equal(resolveTask(h.db, ws, 3).id, third.id);
+    assert.equal(resolveTask(h.db, ws, 3).seq, 3);
+    // Number 2 is first's internal id AND second's visible seq: seq wins again.
+    assert.equal(resolveTask(h.db, ws, 2).id, second.id);
+    // Number 4 is third's internal id and NO row's seq: only here does the
+    // internal id fallback decide, which keeps older callers working.
+    assert.equal(resolveTask(h.db, ws, 4).id, third.id);
+    // Cross-workspace numbers never resolve: id 1 belongs to ws2, and its seq
+    // 1 is not ws2's id 1 anyway; id 2 belongs to ws, so ws2 sees nothing.
+    assert.equal(resolveTask(h.db, ws2, 1).title, 'Other');
+    assert.equal(resolveTask(h.db, ws2, 2), null);
     h.close();
   });
 
