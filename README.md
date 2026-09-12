@@ -49,6 +49,13 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   queue (a pure state reset, `queued_at` back to NULL) so the draft becomes
   editable again — approving it a second time re-enters at the end of the
   FIFO, never at its old position, and unqueueing never promotes.
+  An active card carries **Back to queue**, which sends the task back to the
+  queue without closing it: it frees the slot like a close (so an automatic
+  project starts the FIFO head right away) and re-enters at the end of the
+  FIFO with its branch KEPT — the next promotion resumes the same branch, so
+  commits the previous worker already pushed stay valid — while its worker
+  session is cleared and replaced by a fresh worker chat on re-promotion.
+  Requeueing touches no git state: no merge, no revert, no branch delete.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
 - Everything is English: tool fields (`type/title/state/outcome`), presets,
   panel, prompts, and specs.
