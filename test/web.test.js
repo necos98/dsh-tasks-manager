@@ -380,6 +380,91 @@ describe('web RPC unqueue (panel channel)', () => {
   });
 });
 
+describe('web RPC requeue (panel channel)', () => {
+  it('sends an active task back to the queue and spawns the promoted head', async () => {
+    const { h, store, wsA } = mockStore();
+    const spawned = [];
+    const handlers = createWebHandlers(store, {
+      ctx: { fake: true },
+      spawnWorker: async ({ task }) => { spawned.push(task.id); return { sessionId: 'sess-worker-' + task.id }; },
+    });
+    const blocker = enqueue(h.db, wsA, { type: 'bug', title: 'Blocker', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: blocker.id });
+    const one = enqueue(h.db, wsA, { type: 'bug', title: 'One', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: one.id });
+    spawned.length = 0; // drop what the approvals above spawned
+    const out = await routeWebCall(handlers, 'requeue', { sessionId: 'sess-a', id: blocker.id });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.id, blocker.id);
+    assert.equal(out.value.task.state, 'queued');
+    assert.equal(out.value.task.branch, 'task/' + blocker.seq + '-blocker', 'the branch is kept');
+    assert.equal(out.value.task.worker_session, null);
+    assert.equal(out.value.promoted.id, one.id);
+    assert.equal(out.value.promoted.state, 'active');
+    assert.equal(out.value.queueEnabled, true);
+    assert.deepEqual(spawned, [one.id], 'the promoted head gets a fresh worker');
+    assert.deepEqual(out.value.spawn, { sessionId: 'sess-worker-' + one.id });
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap.value.tasks.find((t) => t.id === blocker.id).state, 'queued');
+    h.close();
+  });
+
+  it('a paused project promotes and spawns nobody', async () => {
+    const { h, store, wsA } = mockStore();
+    const spawned = [];
+    const handlers = createWebHandlers(store, {
+      ctx: { fake: true },
+      spawnWorker: async ({ task }) => { spawned.push(task.id); return { sessionId: 'sess-worker-' + task.id }; },
+    });
+    await routeWebCall(handlers, 'setQueueEnabled', { sessionId: 'sess-a', enabled: false });
+    const one = enqueue(h.db, wsA, { type: 'bug', title: 'One', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: one.id });
+    await routeWebCall(handlers, 'start', { sessionId: 'sess-a', id: one.id }); // active by hand
+    const two = enqueue(h.db, wsA, { type: 'bug', title: 'Two', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: two.id });
+    spawned.length = 0; // drop the worker the manual start above spawned
+    const out = await routeWebCall(handlers, 'requeue', { sessionId: 'sess-a', id: one.id });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.task.state, 'queued');
+    assert.equal(out.value.promoted, null);
+    assert.equal(out.value.queueEnabled, false);
+    assert.equal(out.value.spawn, undefined, 'a paused project spawns nobody');
+    assert.deepEqual(spawned, []);
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap.value.tasks.filter((t) => t.state === 'active').length, 0);
+    assert.deepEqual(
+      snap.value.tasks.filter((t) => t.state === 'queued').map((t) => t.id),
+      [two.id, one.id],
+      'the requeued row re-enters at the end of the FIFO'
+    );
+    h.close();
+  });
+
+  it('cross-workspace and non-active ids fail closed without mutating', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const row = enqueue(h.db, wsA, { type: 'bug', title: 'Mine', spec: '' });
+    await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: row.id }); // active in repo-a
+    const cross = await routeWebCall(handlers, 'requeue', { sessionId: 'sess-b', id: row.id });
+    assert.equal(cross.ok, false);
+    assert.equal(cross.error.code, 'not-found');
+    assert.equal(get(h.db, row.id).state, 'active');
+    const draft = enqueue(h.db, wsA, { type: 'bug', title: 'Still a draft', spec: '' });
+    const notActive = await routeWebCall(handlers, 'requeue', { sessionId: 'sess-a', id: draft.id });
+    assert.equal(notActive.ok, false);
+    assert.equal(notActive.error.code, 'bad-state');
+    const badId = await routeWebCall(handlers, 'requeue', { sessionId: 'sess-a' });
+    assert.equal(badId.ok, false);
+    assert.equal(badId.error.code, 'bad-id');
+    assert.equal(get(h.db, draft.id).state, 'draft');
+    assert.equal(get(h.db, draft.id).queued_at, null);
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.deepEqual(snap.value.tasks.filter((t) => t.state === 'active').map((t) => t.id), [row.id]);
+    assert.equal(snap.value.tasks.filter((t) => t.state === 'queued').length, 0);
+    h.close();
+  });
+});
+
 describe('web RPC queue switch (panel channel)', () => {
   it('snapshot exposes queueEnabled, defaulting to true', async () => {
     const { store } = mockStore();

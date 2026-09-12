@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, queueEnabled, resolveTask, search, setQueueEnabled, slugify, startTask, unqueue } from '../lib/queue.js';
+import { approve, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, queueEnabled, requeue, resolveTask, search, setQueueEnabled, slugify, startTask, unqueue } from '../lib/queue.js';
 
 function fresh() { const h = openMemory(); const ws = ensureWorkspace(h.db, 'C:/repo'); return { h, ws }; }
 
@@ -393,6 +393,120 @@ describe('unqueue (queued -> draft)', () => {
     assert.equal(get(h.db, three.id).state, 'done');
     assert.equal(get(h.db, three.id).close_reason, 'done');
     assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [one.id]);
+    h.close();
+  });
+});
+
+// active -> queued: the task leaves the slot without being closed, so another
+// task can run first (or a dead worker chat can be replaced). Unlike unqueue
+// this is NOT a pure state reset: the row keeps its branch (the next promotion
+// resumes it) but loses its worker session, and freeing the slot runs the same
+// promotion funnel as close.
+describe('requeue (active -> queued)', () => {
+  const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
+  // Paused project with one active, session-bound row: requeue frees the slot
+  // but nothing is promoted until the queue resumes or the user starts by hand.
+  function activeOne() {
+    const { h, ws } = fresh();
+    setQueueEnabled(h.db, ws, false);
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One', spec: 'keep me' });
+    approve(h.db, one.id);
+    startTask(h.db, ws, one.id);
+    bindSession(h.db, one.id, 'sess-old');
+    return { h, ws, one };
+  }
+
+  it('resets state, keeps branch/seq/slug/spec, clears the worker session', () => {
+    const { h, ws, one } = activeOne();
+    const before = get(h.db, one.id);
+    assert.equal(before.state, 'active');
+    const out = requeue(h.db, one.id);
+    assert.equal(out.promoted, null, 'a paused project promotes nothing');
+    assert.equal(out.task.state, 'queued');
+    assert.equal(out.task.branch, before.branch);
+    assert.equal(out.task.branch, 'task/' + one.seq + '-one');
+    assert.equal(out.task.seq, before.seq);
+    assert.equal(out.task.slug, before.slug);
+    assert.equal(out.task.spec, 'keep me');
+    assert.equal(out.task.created_at, before.created_at);
+    assert.equal(out.task.worker_session, null);
+    assert.equal(out.task.closed_at, null);
+    assert.equal(out.task.close_reason, null);
+    assert.ok(typeof out.task.queued_at === 'string');
+    assert.ok(out.task.updated_at >= before.updated_at);
+    assert.equal(list(h.db, ws, 'active').length, 0);
+    h.close();
+  });
+
+  it('re-enters at the END of the FIFO, never at its old position', () => {
+    const { h, ws, one } = activeOne();
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two' });
+    const three = enqueue(h.db, ws, { type: 'bug', title: 'Three' });
+    approve(h.db, two.id); approve(h.db, three.id);
+    requeue(h.db, one.id);
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [two.id, three.id, one.id]);
+    h.close();
+  });
+
+  it('advances like close: an automatic project promotes the FIFO head', () => {
+    const { h, ws } = fresh();
+    const blocker = enqueue(h.db, ws, { type: 'bug', title: 'Blocker' });
+    approve(h.db, blocker.id); // active: the slot is taken
+    const one = enqueue(h.db, ws, { type: 'bug', title: 'One' });
+    const two = enqueue(h.db, ws, { type: 'bug', title: 'Two' });
+    approve(h.db, one.id); approve(h.db, two.id);
+    const out = requeue(h.db, blocker.id);
+    assert.equal(out.task.state, 'queued');
+    assert.equal(out.promoted.id, one.id, 'the oldest queued row takes the freed slot');
+    assert.equal(get(h.db, one.id).state, 'active');
+    assert.equal(get(h.db, two.id).state, 'queued');
+    assert.deepEqual(list(h.db, ws, 'queued').map((t) => t.id), [two.id, blocker.id]);
+    h.close();
+  });
+
+  it('re-promotes the requeued row onto its OWN branch (no -2 suffix)', () => {
+    const { h, ws, one } = activeOne();
+    requeue(h.db, one.id);
+    const resumed = setQueueEnabled(h.db, ws, true);
+    assert.equal(resumed.promoted.id, one.id);
+    assert.equal(get(h.db, one.id).branch, 'task/' + one.seq + '-one');
+    h.close();
+  });
+
+  it('a genuine clash against another row still suffixes the branch', () => {
+    const { h, ws, one } = activeOne();
+    // A closed task whose branch may still exist in git (branches are never
+    // deleted on close — design S8) holding the same name.
+    const other = enqueue(h.db, ws, { type: 'bug', title: 'Other' });
+    approve(h.db, other.id);
+    close(h.db, other.id, 'done');
+    h.db.prepare('UPDATE tasks SET branch = ? WHERE id = ?').run('task/' + one.seq + '-one', other.id);
+    requeue(h.db, one.id);
+    const resumed = setQueueEnabled(h.db, ws, true);
+    assert.equal(resumed.promoted.id, one.id);
+    assert.equal(get(h.db, one.id).branch, 'task/' + one.seq + '-one-2');
+    h.close();
+  });
+
+  it('rejects draft, queued, closed and unknown ids without mutating', () => {
+    const { h, ws } = fresh();
+    setQueueEnabled(h.db, ws, false);
+    const draft = enqueue(h.db, ws, { type: 'bug', title: 'Draft' });
+    const queued = enqueue(h.db, ws, { type: 'bug', title: 'Queued' });
+    approve(h.db, queued.id);
+    const done = enqueue(h.db, ws, { type: 'bug', title: 'Done' });
+    approve(h.db, done.id);
+    close(h.db, done.id, 'done');
+    assert.equal(codeOf(() => requeue(h.db, draft.id)), 'bad-state');
+    assert.equal(codeOf(() => requeue(h.db, queued.id)), 'bad-state');
+    assert.equal(codeOf(() => requeue(h.db, done.id)), 'bad-state');
+    assert.equal(codeOf(() => requeue(h.db, 9999)), 'not-found');
+    assert.equal(get(h.db, draft.id).state, 'draft');
+    assert.equal(get(h.db, draft.id).queued_at, null);
+    assert.equal(get(h.db, queued.id).state, 'queued');
+    assert.equal(get(h.db, done.id).state, 'done');
+    assert.equal(get(h.db, done.id).close_reason, 'done');
+    assert.equal(list(h.db, ws, 'active').length, 0);
     h.close();
   });
 });
