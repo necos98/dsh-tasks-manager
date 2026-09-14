@@ -2,16 +2,19 @@
 #
 # This file is an AGENT-PLANE composition (see standard preset header for how
 # the roster mounts it). The intake agent is the ANALYST of the pipeline: it
-# talks to the user, deeply inspects the repo read-only (grep/glob via search,
-# git log via one-shot shell), finds the root cause, and files task drafts
-# whose specs are directly executable. The worker is a pure code executor and
-# must never receive analysis work ("investigate X", "figure out why Y").
+# talks to the user, deeply inspects the repo read-only (read via the plugin's
+# own read-tool entry, grep/glob via search, git log via one-shot shell), finds
+# the root cause, and files task drafts whose specs are directly executable. The
+# worker is a pure code executor and must never receive analysis work
+# ("investigate X", "figure out why Y").
 # The intake has NO file write/edit tools: no dsh-tool-fs row (read+write+edit
-# come as one suite), no str_replace_editor, no persistent shell. That absence
-# is physical, not a prompt rule (design-tasks-simple.md S3) — with one
-# declared limit: the one-shot shell rows kept for git log CAN technically
-# write, so the ban rests on tool absence + approval policy, not on a shell
-# block.
+# come as one suite, so mounting it would bring write+edit), no
+# str_replace_editor, no persistent shell. `read` comes from
+# dsh-tasks-manager/read-tool below, which registers that one tool and nothing
+# that mutates. That absence is physical, not a prompt rule
+# (design-tasks-simple.md S3) — with one declared limit: the one-shot shell rows
+# kept for git log CAN technically write, so the ban rests on tool absence +
+# approval policy, not on a shell block.
 #
 # Task-queue tools come from the dsh-tasks-manager/intake-tools scoped entry:
 # ONLY enqueue_task, edit_draft, list_tasks, task_detail. approve/close are USER-ONLY and
@@ -126,18 +129,26 @@
   name: '@deepseek-ai/dsh-tool-pwsh'
   disabled: !!js process.platform !== 'win32'
 
-# -- read-only filesystem: NO write/edit rows --------------------------------
+# -- read-only filesystem: exactly one tool, NO write/edit rows --------------
 #
 # dsh-tool-fs registers read/write/edit as one suite (no per-tool split), so
 # mounting it would give the intake agent write+edit tools: it is deliberately
-# ABSENT here (design-tasks-simple.md S3/S12). Repo inspection is read-only via
-# tool-fs-search (read/grep/glob) below; git log runs through the one-shot
-# shell rows above. str_replace_editor is deliberately ABSENT here too.
+# ABSENT here (design-tasks-simple.md S3/S12). `tools.restrict()` cannot mask
+# them either — a restriction only filters tools a scope INHERITS, never the
+# ones the preset itself registered. Repo reading therefore comes from this
+# plugin's own read-only entry (lib/read-tool.js): `read` alone, over the host
+# `fs` service. `grep`/`glob` come from tool-fs-search below; git log runs
+# through the one-shot shell rows above. str_replace_editor is deliberately
+# ABSENT here too: the plugin never mounts it.
 #
 # Residual risk (declared honestly): the one-shot shell rows kept for git log
 # CAN technically write (shell cannot be made read-only per command). The ban
-# on code writing therefore rests on tool absence (no fs write/edit row) +
-# approval policy, not on a physical shell block.
+# on code writing therefore rests on tool absence (no fs write/edit tool) +
+# approval policy, not on a physical shell block. Mount EITHER read-tool OR
+# dsh-tool-fs here, never both: both register the name `read`.
+
+- id: read-tool
+  name: 'dsh-tasks-manager/read-tool'
 
 - id: tool-fs-search
   name: '@deepseek-ai/dsh-tool-fs-search'
