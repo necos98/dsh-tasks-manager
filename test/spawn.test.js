@@ -65,11 +65,11 @@ describe('spawn identified prompt', () => {
   });
 
   it('modesOfCtx reads the toggles, safe on missing pieces', () => {
-    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerCanMerge: false, workerRules: '' });
-    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerCanMerge: false, workerRules: '' });
+    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
+    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
     assert.deepEqual(
       modesOfCtx({ get: (k) => k === 'settings' ? { get: () => ({ workerCanMerge: true }) } : undefined }),
-      { workerCanFinish: false, workerCanMerge: true, workerRules: '' },
+      { workerCanFinish: false, workerCanMerge: true, workerRules: '', workerModel: '' },
     );
   });
 
@@ -83,6 +83,75 @@ describe('spawn identified prompt', () => {
       '',
     );
     assert.equal(modesOfCtx(undefined).workerRules, '');
+  });
+
+  it('modesOfCtx reads workerModel, safe on missing/non-string', () => {
+    assert.equal(
+      modesOfCtx({ get: (k) => k === 'settings' ? { get: () => ({ workerModel: 'anthropic/claude-3.5-sonnet' }) } : undefined }).workerModel,
+      'anthropic/claude-3.5-sonnet',
+    );
+    assert.equal(
+      modesOfCtx({ get: (k) => k === 'settings' ? { get: () => ({ workerModel: 42 }) } : undefined }).workerModel,
+      '',
+    );
+    assert.equal(modesOfCtx(undefined).workerModel, '');
+  });
+
+  it('spawnWorker pins the worker model to the workerModel setting', async () => {
+    const h = openMemory();
+    const ws = ensureWorkspace(h.db, 'C:/repo-a');
+    const row = enqueue(h.db, ws, { type: 'bug', title: 'Model', spec: '' });
+    h.db.prepare('UPDATE tasks SET state = ? WHERE id = ?').run('active', row.id);
+    const active = get(h.db, row.id);
+    const created = {};
+    const ctx = {
+      get(key) {
+        if (key === 'agents') {
+          return {
+            create: (args) => {
+              created.agentOptions = args.agentOptions;
+              return { agent: { session: { id: args.sessionId }, followup: () => {} } };
+            },
+          };
+        }
+        if (key === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'p', model: 'default-model' }) };
+        }
+        if (key === 'settings') return { get: () => ({ workerModel: 'foo/bar' }) };
+        return undefined;
+      },
+    };
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task: active });
+    assert.equal(created.agentOptions.model, 'foo/bar');
+    h.close();
+  });
+
+  it('spawnWorker without a workerModel keeps the default model', async () => {
+    const h = openMemory();
+    const ws = ensureWorkspace(h.db, 'C:/repo-a');
+    const row = enqueue(h.db, ws, { type: 'bug', title: 'Model', spec: '' });
+    h.db.prepare('UPDATE tasks SET state = ? WHERE id = ?').run('active', row.id);
+    const active = get(h.db, row.id);
+    const created = {};
+    const ctx = {
+      get(key) {
+        if (key === 'agents') {
+          return {
+            create: (args) => {
+              created.agentOptions = args.agentOptions;
+              return { agent: { session: { id: args.sessionId }, followup: () => {} } };
+            },
+          };
+        }
+        if (key === 'agentDefaultModel') {
+          return { currentSelection: () => ({ provider: 'p', model: 'default-model' }) };
+        }
+        return undefined;
+      },
+    };
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task: active });
+    assert.equal(created.agentOptions.model, 'default-model');
+    h.close();
   });
 
   it('workerPrompt appends user rules verbatim under a labelled section', () => {
