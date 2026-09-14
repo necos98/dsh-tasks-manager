@@ -8,6 +8,7 @@
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./intake-tools": "./lib/intake-tools.js",
+    "./read-tool": "./lib/read-tool.js",
     "./worker-tools": "./lib/worker-tools.js",
     "./package.json": "./package.json"
   },

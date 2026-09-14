@@ -78,8 +78,13 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 
 ## Layout
 
-- `lib/` — plugin code (`index.js` host entry, `intake-tools.js` / `worker-tools.js` scoped entries, `queue.js` queue domain, `tools.js` tool definitions, `config.js` schemastery schemas, `db.js`, `paths.js`, `runtime.js`).
+- `lib/` — plugin code (`index.js` host entry, `intake-tools.js` / `worker-tools.js` scoped entries, `read-tool.js` read-only `read` for intake + its pure `read-window.js`, `queue.js` queue domain, `tools.js` tool definitions, `config.js` schemastery schemas, `db.js`, `paths.js`, `runtime.js`).
 - `presets/taskqueue-intake` — triage-only agent (no file-write tools).
+  Repo inspection gets `read` from this plugin's own read-only entry
+  (`dsh-tasks-manager/read-tool`, `lib/read-tool.js`): `read` alone over the
+  host `fs` service, because `dsh-tool-fs` registers read/write/edit as one
+  suite and mounting it would hand triage write+edit. A preset mounts either
+  that entry or `dsh-tool-fs`, never both (both register the name `read`).
 - `presets/taskqueue-worker` — one-task executor (full dev on its branch).
 
 ## Config
