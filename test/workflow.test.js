@@ -224,7 +224,7 @@ describe('workflow on the real host', () => {
     );
   });
 
-  it('web RPC endpoints are intercepted on the shared /api channel', async () => {
+  it('web RPC channel is registered on the private /tasks-queue route', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -241,13 +241,20 @@ describe('workflow on the real host', () => {
     let captured = null;
     const fakeConnection = {
       rpc: {
-        intercept: (channel, matches, handler) => {
-          captured = { channel, matches, handler };
+        handle: (channel, handler, options) => {
+          captured = { channel, handler, options };
         },
       },
     };
-    // Minimal connection service double carrying the RPC face.
+    // Minimal doubles for the two services register() resolves: the RPC face,
+    // and the webServer property the calling context is extended with.
     const { Service } = await import('@deepseek-ai/cordis');
+    class FakeWebServer extends Service {
+      static inject = [];
+      constructor(c, config) {
+        super(c, 'webServer');
+      }
+    }
     class FakeConnection extends Service {
       static inject = [];
       constructor(c, config) {
@@ -260,30 +267,32 @@ describe('workflow on the real host', () => {
     await ctx.plugin(CommandRuntime, {});
     await ctx.plugin(MemorySettings, {});
     await ctx.plugin(FakeRegistry, {});
+    await ctx.plugin(FakeWebServer, {});
     await ctx.plugin(FakeConnection, {});
     await ctx.plugin(plugin, {
       enabled: true, order: 50, allowCommand: true, baseBranch: '', dshHome,
     });
     try {
-      assert.ok(captured, 'rpc.intercept was called');
-      assert.equal(captured.channel, '/api');
-      assert.equal(captured.matches('tasks-queue/snapshot'), true);
-      assert.equal(captured.matches('session/list'), false);
-      // End-to-end through the intercepted endpoints: file via tool, read via RPC.
+      assert.ok(captured, 'rpc.handle was called');
+      assert.equal(captured.channel, '/tasks-queue');
+      assert.deepEqual(captured.options, { authority: 'loopback' });
+      // End-to-end through the channel: file via tool, read via RPC.
       // Minimal host here (no agents service): approve promotes to active,
       // the spawn fails closed, and the failure rides the payload WITHOUT
       // rolling back the promotion (failure policy, lib/web.js).
       const filed = await callTool(ctx, 'sess-a', 'enqueue_task', { type: 'bug', title: 'Via channel' });
-      const snap = await captured.handler('tasks-queue/snapshot', { sessionId: 'sess-a' });
+      const snap = await captured.handler('snapshot', { sessionId: 'sess-a' });
       assert.equal(snap.ok, true);
       assert.equal(snap.value.tasks.length, 1);
-      const approved = await captured.handler('tasks-queue/approve', { sessionId: 'sess-a', id: filed.value.id });
+      const approved = await captured.handler('approve', { sessionId: 'sess-a', id: filed.value.id });
       assert.equal(approved.ok, true);
       assert.equal(approved.value.task.state, 'active');
       assert.match(approved.value.spawn.error, /agents service unavailable/);
-      const closed = await captured.handler('tasks-queue/close', { sessionId: 'sess-a', id: filed.value.id, outcome: 'done' });
+      const closed = await captured.handler('close', { sessionId: 'sess-a', id: filed.value.id, outcome: 'done' });
       assert.equal(closed.ok, true);
       assert.equal(closed.value.task.state, 'done');
+      const unknown = await captured.handler('nope', {});
+      assert.equal(unknown.ok, false);
     } finally {
       await ctx.fiber.dispose();
       rmSync(dshHome, { recursive: true, force: true });
