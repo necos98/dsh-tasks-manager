@@ -16,7 +16,7 @@
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
-    text: >-
+    prefix: >-
       You are a task worker agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
       You execute ONE task: read it with get_my_task, work on its branch in

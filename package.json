@@ -20,7 +20,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "node scripts/check.mjs",
+    "check": "node scripts/check.mjs && node scripts/validate-presets.mjs",
+    "validate:presets": "node scripts/validate-presets.mjs",
     "test": "node --test"
   },
   "license": "MIT",

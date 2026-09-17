@@ -86,6 +86,12 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
   suite and mounting it would hand triage write+edit. A preset mounts either
   that entry or `dsh-tool-fs`, never both (both register the name `read`).
 - `presets/taskqueue-worker` — one-task executor (full dev on its branch).
+- `scripts/validate-presets.mjs` — `npm run validate:presets` (also part of
+  `npm run check`) parses both `agent.cordis.yml` files with the loader's own
+  entry-list dialect and validates every row's `config` against the installed
+  plugin's `Config` schema, exactly as the loader does at mount: a renamed or
+  changed field fails here instead of when a user switches preset. It skips
+  when no DSH install is reachable (`DSH_NODE_MODULES` overrides the search).
 
 ## Config
 
