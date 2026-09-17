@@ -183,6 +183,63 @@ describe('web RPC (panel channel)', () => {
     assert.equal((await routeWebCall(handlers, 'approve', { sessionId: 'sess-a', id: 999 })).ok, false);
   });
 
+  it('modelRoutes returns providers when the llm service is present', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store, {
+      ctx: {
+        get: (key) => key === 'llm'
+          ? {
+              listProviders: () => [
+                { id: 'deepseek', name: 'DeepSeek' },
+                { id: 'openai', name: 'OpenAI' },
+              ],
+              listModels: async (provider) => {
+                if (provider === 'deepseek') {
+                  return [
+                    { id: 'deepseek-chat', name: 'DeepSeek V3' },
+                    { id: 'deepseek-reasoner', name: 'DeepSeek R1' },
+                  ];
+                }
+                return [
+                  { id: 'gpt-4o', name: 'GPT-4o' },
+                ];
+              },
+            }
+          : undefined,
+      },
+    });
+    const out = await routeWebCall(handlers, 'modelRoutes', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.equal(out.value.providers.length, 2);
+    assert.equal(out.value.providers[0].id, 'deepseek');
+    assert.equal(out.value.providers[0].name, 'DeepSeek');
+    assert.equal(out.value.providers[0].models.length, 2);
+    assert.equal(out.value.providers[0].models[0].id, 'deepseek-chat');
+    assert.equal(out.value.providers[0].models[0].name, 'DeepSeek V3');
+    assert.equal(out.value.providers[1].id, 'openai');
+    assert.equal(out.value.providers[1].models.length, 1);
+    assert.equal(out.value.providers[1].models[0].id, 'gpt-4o');
+  });
+
+  it('modelRoutes falls back to an empty list when the llm service is absent', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store);
+    const out = await routeWebCall(handlers, 'modelRoutes', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.deepEqual(out.value.providers, []);
+  });
+
+  it('modelRoutes is read-only: it does not touch queue state', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const row = enqueue(h.db, wsA, { type: 'bug', title: 'Still a draft', spec: '' });
+    assert.equal(row.state, 'draft');
+    const out = await routeWebCall(handlers, 'modelRoutes', { sessionId: 'sess-a' });
+    assert.equal(out.ok, true);
+    assert.equal(get(h.db, row.id).state, 'draft', 'the draft row is untouched');
+    h.close();
+  });
+
   it('approve spawns the worker and binds its session', async () => {
     const { store } = mockStore();
     let spawned = null;
