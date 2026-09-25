@@ -833,3 +833,72 @@ describe('web RPC with diverged ids and seqs (panel addressing)', () => {
     h.close();
   });
 });
+
+// The manual GitHub updater: three deployment-wide endpoints (lib/updater.js)
+// mounted through hooks.updater. They need no sessionId and touch no queue row.
+describe('web RPC updater endpoints', () => {
+  function fakeUpdater(overrides = {}) {
+    const seen = [];
+    const updater = async (endpoint, payload) => {
+      seen.push({ endpoint, payload });
+      const answer = overrides[endpoint];
+      return answer === undefined ? { ok: true, value: { endpoint } } : await answer(payload);
+    };
+    return { updater, seen };
+  }
+
+  it('routes updateStatus without a sessionId', async () => {
+    const { store } = mockStore();
+    const { updater, seen } = fakeUpdater({
+      updateStatus: async () => ({ ok: true, value: { repository: 'necos98/dsh-tasks-manager', current: '0.1.0' } }),
+    });
+    const handlers = createWebHandlers(store, { updater });
+    const out = await routeWebCall(handlers, 'updateStatus', {});
+    assert.equal(out.ok, true);
+    assert.equal(out.value.current, '0.1.0');
+    assert.deepEqual(seen, [{ endpoint: 'updateStatus', payload: {} }]);
+  });
+
+  it('routes checkUpdate and applyUpdate with their payloads', async () => {
+    const { store } = mockStore();
+    const { updater, seen } = fakeUpdater({
+      checkUpdate: async () => ({ ok: true, value: { status: 'update-available', current: '0.1.0', latest: 'v0.1.1' } }),
+      applyUpdate: async (payload) => ({ ok: true, value: { restartRequired: true, force: payload.force === true } }),
+    });
+    const handlers = createWebHandlers(store, { updater });
+    const check = await routeWebCall(handlers, 'checkUpdate', {});
+    assert.equal(check.value.status, 'update-available');
+    const applied = await routeWebCall(handlers, 'applyUpdate', { force: true });
+    assert.equal(applied.ok, true);
+    assert.equal(applied.value.force, true);
+    assert.equal(applied.value.restartRequired, true);
+    assert.deepEqual(seen.map((s) => s.endpoint), ['checkUpdate', 'applyUpdate']);
+  });
+
+  it('answers "the updater is not mounted" when no updater is injected', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store);
+    for (const endpoint of ['updateStatus', 'checkUpdate', 'applyUpdate']) {
+      const out = await routeWebCall(handlers, endpoint, {});
+      assert.equal(out.ok, false);
+      assert.equal(out.error.code, 'internal');
+      assert.match(out.error.message, /the updater is not mounted/);
+    }
+  });
+
+  it('turns an updater failure into an answer, never a rejection', async () => {
+    const { store } = mockStore();
+    const handlers = createWebHandlers(store, {
+      updater: async () => ({ ok: false, error: { code: 'bad-request', message: 'nothing to update', details: {} } }),
+    });
+    const refused = await routeWebCall(handlers, 'applyUpdate', {});
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error.code, 'bad-request');
+    const handlersThatThrow = createWebHandlers(store, {
+      updater: async () => { throw new Error('boom'); },
+    });
+    const thrown = await routeWebCall(handlersThatThrow, 'checkUpdate', {});
+    assert.equal(thrown.ok, false);
+    assert.equal(thrown.error.message, 'boom');
+  });
+});
