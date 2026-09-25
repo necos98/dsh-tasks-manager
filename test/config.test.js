@@ -16,7 +16,10 @@ describe('config guard', () => {
   });
 
   it('CONFIG_KEYS match the documented keys exactly', () => {
-    assert.deepEqual([...CONFIG_KEYS].sort(), ['allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section', 'syncPresets']);
+    assert.deepEqual([...CONFIG_KEYS].sort(), [
+      'allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section', 'syncPresets',
+      'updateIncludePrerelease', 'updateProfile', 'updateProfileDir', 'updateRepository', 'updateTimeoutMs', 'updateToken',
+    ]);
   });
 
   it('fills schemastery defaults for missing keys', () => {
@@ -40,6 +43,34 @@ describe('config guard', () => {
     assert.equal(typeof Config['~standard'].validate, 'function');
     const ok = Config['~standard'].validate({ enabled: true });
     assert.equal(ok.value.enabled, true);
+  });
+
+  it('carries the six updater keys with their deployment defaults', () => {
+    const r = resolveConfig({});
+    assert.equal(r.updateRepository, 'necos98/dsh-tasks-manager');
+    assert.equal(r.updateProfile, '');
+    assert.equal(r.updateIncludePrerelease, false);
+    assert.equal(r.updateTimeoutMs, 180000);
+    assert.equal(r.updateProfileDir, '');
+    assert.equal(r.updateToken, '');
+  });
+
+  it('accepts explicit updater values and validates their types', () => {
+    const r = resolveConfig({
+      updateRepository: 'necos98/dsh-tasks-manager',
+      updateProfile: 'web',
+      updateIncludePrerelease: true,
+      updateTimeoutMs: 5000,
+      updateProfileDir: 'C:/Users/jacob/.dsh/profiles/web',
+      updateToken: 'ghp_x',
+    });
+    assert.equal(r.updateProfile, 'web');
+    assert.equal(r.updateIncludePrerelease, true);
+    assert.equal(r.updateTimeoutMs, 5000);
+    assert.equal(r.updateProfileDir, 'C:/Users/jacob/.dsh/profiles/web');
+    assert.equal(r.updateToken, 'ghp_x');
+    assert.throws(() => resolveConfig({ updateIncludePrerelease: 'yes' }), /updateIncludePrerelease/);
+    assert.throws(() => resolveConfig({ updateTimeoutMs: 'soon' }), /updateTimeoutMs/);
   });
 });
 
