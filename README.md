@@ -49,6 +49,23 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   reports the conflicting files, and waits: the task stays open, no
   --theirs/--ours, no hand resolutions, no force on base. When `false`
   the human merges outside and the worker never touches base.
+- Manual GitHub updater (Settings → Tasks → "Updates"): **Check for
+  updates** reads the RELEASE TAGS of `github.com/necos98/dsh-tasks-manager`
+  and compares them with the version installed in the profile;
+  **Update to vX.Y.Z** installs the newest release with
+  `dsh plugin --profile <profile> add github:<repo>#<tag>`, falling back to
+  `pnpm add` in the profile directory when the `dsh` executable is missing.
+  Nothing runs on mount and nothing polls: the tag lookup happens only on
+  the click. Releases are TAGS, never a branch head, so the version the page
+  reports is the version the profile ends up with; with no tag yet the check
+  answers "No release yet" plus the recipe. A successful install shows a
+  "restart required" notice — a bundle's patch layer composes at boot, so
+  restart `dsh web` to load it. A `link:` install is reported and refused
+  (update it in its own checkout), and two browser tabs share one install
+  queue. Version source, install command and the manual-only rule are
+  deployment config, not panel switches: `updateRepository`,
+  `updateProfile`, `updateIncludePrerelease`, `updateTimeoutMs`,
+  `updateProfileDir`, `updateToken` (see Config).
 - Per-project queue switch (Tasks panel header, `workspaces.queue_enabled`,
   default ON): OFF pauses the project, so `approve` only moves the draft to
   `queued` — no promotion, no spawn — and closing the active task leaves the
@@ -78,7 +95,7 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 
 ## Layout
 
-- `lib/` — plugin code (`index.js` host entry, `intake-tools.js` / `worker-tools.js` scoped entries, `read-tool.js` read-only `read` for intake + its pure `read-window.js`, `queue.js` queue domain, `tools.js` tool definitions, `config.js` schemastery schemas, `db.js`, `paths.js`, `runtime.js`).
+- `lib/` — plugin code (`index.js` host entry, `intake-tools.js` / `worker-tools.js` scoped entries, `read-tool.js` read-only `read` for intake + its pure `read-window.js`, `queue.js` queue domain, `tools.js` tool definitions, `config.js` schemastery schemas, `updater.js` manual GitHub updater domain, `db.js`, `paths.js`, `runtime.js`).
 - `presets/taskqueue-intake` — triage-only agent (no file-write tools).
   Repo inspection gets `read` from this plugin's own read-only entry
   (`dsh-tasks-manager/read-tool`, `lib/read-tool.js`): `read` alone over the
@@ -95,7 +112,21 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 
 ## Config
 
-`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`), `syncPresets` (default true).
+`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`), `syncPresets` (default true), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well).
+
+### Releasing (what the updater reads)
+
+The updater follows RELEASE TAGS only, and a tag that does not parse as
+`vX.Y.Z` / `X.Y.Z` (prereleases apart) is ignored, so a release is three
+steps: bump `version` in `package.json`, tag the commit, push the tag.
+
+```sh
+git tag v0.1.1 && git push origin v0.1.1
+```
+
+With zero tags the page answers "No release yet" and names this recipe; with
+a newer tag it offers the install. `updateIncludePrerelease: true` also
+considers `X.Y.Z-<prerelease>` tags.
 
 DSH discovers presets only from fixed roots (never from plugin directories),
 so at startup the plugin copies its own `presets/taskqueue-*` compositions
