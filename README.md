@@ -96,23 +96,28 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 ## Layout
 
 - `lib/` — plugin code (`index.js` host entry, `intake-tools.js` / `worker-tools.js` scoped entries, `read-tool.js` read-only `read` for intake + its pure `read-window.js`, `queue.js` queue domain, `tools.js` tool definitions, `config.js` schemastery schemas, `updater.js` manual GitHub updater domain, `db.js`, `paths.js`, `runtime.js`).
-- `presets/taskqueue-intake` — triage-only agent (no file-write tools).
+- `presets/taskqueue-intake.patch.yml` — the triage-only agent (no file-write
+  tools), shipped as an `@deepseek-ai/dsh-agent-preset` declaration (see
+  "How the presets are published" below).
   Repo inspection gets `read` from this plugin's own read-only entry
   (`dsh-tasks-manager/read-tool`, `lib/read-tool.js`): `read` alone over the
   host `fs` service, because `dsh-tool-fs` registers read/write/edit as one
   suite and mounting it would hand triage write+edit. A preset mounts either
   that entry or `dsh-tool-fs`, never both (both register the name `read`).
-- `presets/taskqueue-worker` — one-task executor (full dev on its branch).
+- `presets/taskqueue-worker.patch.yml` — one-task executor (full dev on its
+  branch).
 - `scripts/validate-presets.mjs` — `npm run validate:presets` (also part of
-  `npm run check`) parses both `agent.cordis.yml` files with the loader's own
-  entry-list dialect and validates every row's `config` against the installed
-  plugin's `Config` schema, exactly as the loader does at mount: a renamed or
-  changed field fails here instead of when a user switches preset. It skips
-  when no DSH install is reachable (`DSH_NODE_MODULES` overrides the search).
+  `npm run check`) walks the package's own `dsh.bundle.patch` list, parses every
+  patch file with the loader's own entry-list dialect and validates each row's
+  `config` against the installed plugin's `Config` schema, descending into a
+  preset declaration's `config.plugins` — exactly as the loader does at mount:
+  a renamed or changed field fails here instead of when a user switches preset.
+  It skips when no DSH install is reachable (`DSH_NODE_MODULES` overrides the
+  search).
 
 ## Config
 
-`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`), `syncPresets` (default true), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerCanMerge` (default false), `workerRules` (default `""`), `workerModel` (default `""`).
+`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`, locates the queue database), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerCanMerge` (default false), `workerRules` (default `""`), `workerModel` (default `""`).
 
 ### The settings namespace
 
@@ -149,11 +154,23 @@ With zero tags the page answers "No release yet" and names this recipe; with
 a newer tag it offers the install. `updateIncludePrerelease: true` also
 considers `X.Y.Z-<prerelease>` tags.
 
-DSH discovers presets only from fixed roots (never from plugin directories),
-so at startup the plugin copies its own `presets/taskqueue-*` compositions
-into `<dshHome>/.agent-presets`, always overwriting: the plugin source is the
-single authority, hand edits in the installed copy are discarded on next boot.
-`syncPresets: false` disables the copy entirely.
+### How the presets are published
+
+Since **DSH 0.1.7-rc.2** a preset IS an `@deepseek-ai/dsh-agent-preset`
+declaration carried by a bundle patch, and the harness reads declarations only:
+the legacy `$DSH_HOME/.agent-presets/<id>/` root (a directory holding
+`preset.yml` + `agent.cordis.yml`, which this plugin used to copy there at
+startup) **is read by nothing any more**. This package therefore ships its two
+presets as `presets/taskqueue-intake.patch.yml` and
+`presets/taskqueue-worker.patch.yml`, listed in its own `dsh.bundle.patch`, so
+the loader inserts the `preset-taskqueue-intake` / `preset-taskqueue-worker`
+rows while it composes the profile. The plugin source is still the single
+authority — nothing is copied onto disk at boot.
+
+The declarations need the harness's `agentPresets` service, which the shipped
+Web profile mounts (`@deepseek-ai/dsh-web-app` inserts `agent-preset-registry`
+before this bundle). A bundle's patch layer composes at boot, so update the
+plugin in the profile and restart `dsh web` to load them.
 
 `order: 50` places the `tasks:policy` section right after the persona: the queue's USER-ONLY rule (approve/close are never the model) must precede every tool description, otherwise triage/worker prompts read as ordinary tool guidance. Official placements (`TOOL_READ=1100` etc.) sit far below; policy first is deliberate.
 
@@ -168,6 +185,13 @@ saved by an earlier version under `tasks` (finish/merge toggles, `baseBranch`,
 from then on. A hand-written `tasks:` block in `~/.dsh/settings.yaml` is
 ignored for the same reason. Nothing else about the install changes — the
 plugin's patch row id stays `dsh-tasks-manager`.
+
+Since **0.3.1** the two presets are shipped as bundle declarations instead of
+being copied into `$DSH_HOME/.agent-presets` (see "How the presets are
+published"). Delete the stale `$DSH_HOME/.agent-presets/taskqueue-*`
+directories once — nothing reads them — and drop a leftover `syncPresets:` key
+from a profile patch: it is no longer a config key (a loader-resolved row
+passes unknown keys through, so an old value is harmless but ignored).
 
 ## Development
 

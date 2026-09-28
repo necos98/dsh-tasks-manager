@@ -1,3 +1,0 @@
-name: Task Worker
-description: "One task executor: full dev on its branch in your checkout, push, report ready."
-order: 11
