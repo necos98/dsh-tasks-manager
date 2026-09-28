@@ -1,6 +1,28 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { Config, CONFIG_KEYS, resolveConfig, tasksSchema } from '../lib/config.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import {
+  Config,
+  CONFIG_KEYS,
+  SETTINGS_KEYS,
+  SETTINGS_NS,
+  resolveConfig,
+  settingsValueOf,
+  toPlain,
+} from '../lib/config.js';
+
+/** Unwrap a resolved Config section the way DSH's plainConfig does. */
+function plain(value) {
+  return toPlain(value);
+}
+
+/** The settings-namespace subset of a resolved Config section. */
+function settingsOf(resolved) {
+  const all = plain(resolved);
+  return Object.fromEntries(SETTINGS_KEYS.map((key) => [key, all[key]]));
+}
 
 describe('config guard', () => {
   it('accepts the documented explicit config (FIX-01)', () => {
@@ -19,6 +41,7 @@ describe('config guard', () => {
     assert.deepEqual([...CONFIG_KEYS].sort(), [
       'allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section', 'syncPresets',
       'updateIncludePrerelease', 'updateProfile', 'updateProfileDir', 'updateRepository', 'updateTimeoutMs', 'updateToken',
+      'workerCanFinish', 'workerCanMerge', 'workerModel', 'workerRules',
     ]);
   });
 
@@ -74,39 +97,119 @@ describe('config guard', () => {
   });
 });
 
-describe('tasksSchema (settings)', () => {
-  it('resolves defaults like every official caller expects', () => {
-    assert.deepEqual(tasksSchema({}), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
-    assert.deepEqual(tasksSchema({ baseBranch: 'main' }), { baseBranch: 'main', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
+// The live settings namespace is now the VOLATILE subset of the plugin Config
+// (DSH 0.1.7-rc.2 derives it from the entry's schema and keys it by the patch
+// row id); the former standalone `tasksSchema` is gone.
+describe('settings namespace (volatile Config fields)', () => {
+  const NS = SETTINGS_NS;
+
+  it('every settings field is volatile, so the namespace exists', () => {
+    // describe() drops an entry whose volatileForm() is undefined: a schema with
+    // NO volatile field produces no settings namespace at all, and the browser
+    // half then can never see the settings.
+    for (const key of SETTINGS_KEYS) {
+      assert.equal(Config.dict[key]?.meta?.volatile, true, `${key} is volatile`);
+    }
+  });
+
+  it('deployment-only keys stay OUT of the settings form', () => {
+    // `section` is the policy text and `updateToken` is a secret: neither may
+    // ride the settings form to the browser.
+    for (const key of ['section', 'updateToken', 'enabled', 'order', 'allowCommand', 'dshHome']) {
+      assert.notEqual(Config.dict[key]?.meta?.volatile, true, `${key} is not volatile`);
+    }
+  });
+
+  it('SETTINGS_KEYS lists exactly the volatile fields', () => {
+    const volatile = Object.keys(Config.dict).filter((k) => Config.dict[k].meta?.volatile === true);
+    assert.deepEqual([...SETTINGS_KEYS].sort(), [...volatile].sort());
+  });
+
+  it('resolves defaults like every consumer expects', () => {
+    assert.deepEqual(plain(Config({})), {
+      enabled: false, order: 50, allowCommand: true, section: Config.dict.section.meta.default,
+      dshHome: '', syncPresets: true, updateRepository: 'necos98/dsh-tasks-manager',
+      updateProfile: '', updateIncludePrerelease: false, updateTimeoutMs: 180000,
+      updateProfileDir: '', updateToken: '',
+      baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '',
+    });
+    assert.deepEqual(settingsOf(Config({ baseBranch: 'main' })), {
+      baseBranch: 'main', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '',
+    });
   });
 
   it('rejects non-string baseBranch', () => {
-    assert.throws(() => tasksSchema({ baseBranch: 42 }), /baseBranch/);
+    assert.throws(() => Config({ baseBranch: 42 }), /baseBranch/);
   });
 
   it('workerCanFinish defaults false and validates booleans', () => {
-    assert.deepEqual(tasksSchema({ workerCanFinish: true }), { baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '' });
-    assert.throws(() => tasksSchema({ workerCanFinish: 'yes' }), /workerCanFinish/);
+    assert.deepEqual(settingsOf(Config({ workerCanFinish: true })), {
+      baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '',
+    });
+    assert.throws(() => Config({ workerCanFinish: 'yes' }), /workerCanFinish/);
   });
 
   it('workerCanMerge defaults false and validates booleans', () => {
-    assert.deepEqual(tasksSchema({ workerCanMerge: true }), { baseBranch: '', workerCanFinish: false, workerCanMerge: true, workerRules: '', workerModel: '' });
-    assert.throws(() => tasksSchema({ workerCanMerge: 'yes' }), /workerCanMerge/);
+    assert.deepEqual(settingsOf(Config({ workerCanMerge: true })), {
+      baseBranch: '', workerCanFinish: false, workerCanMerge: true, workerRules: '', workerModel: '',
+    });
+    assert.throws(() => Config({ workerCanMerge: 'yes' }), /workerCanMerge/);
   });
 
   it('workerRules defaults to empty string and stays verbatim', () => {
-    assert.deepEqual(tasksSchema({ workerRules: 'alla fine del lavoro aggiorna la wiki' }), {
+    assert.deepEqual(settingsOf(Config({ workerRules: 'alla fine del lavoro aggiorna la wiki' })), {
       baseBranch: '', workerCanFinish: false, workerCanMerge: false,
       workerRules: 'alla fine del lavoro aggiorna la wiki', workerModel: '',
     });
-    assert.throws(() => tasksSchema({ workerRules: 42 }), /workerRules/);
+    assert.throws(() => Config({ workerRules: 42 }), /workerRules/);
   });
 
   it('workerModel defaults to empty string and validates strings', () => {
-    assert.deepEqual(tasksSchema({ workerModel: 'anthropic/claude-3.5-sonnet' }), {
+    assert.deepEqual(settingsOf(Config({ workerModel: 'anthropic/claude-3.5-sonnet' })), {
       baseBranch: '', workerCanFinish: false, workerCanMerge: false,
       workerRules: '', workerModel: 'anthropic/claude-3.5-sonnet',
     });
-    assert.throws(() => tasksSchema({ workerModel: 42 }), /workerModel/);
+    assert.throws(() => Config({ workerModel: 42 }), /workerModel/);
+  });
+});
+
+// The entry-keyed contract has one silent failure mode: the browser half asks
+// configForms for SETTINGS_NS while the harness publishes the namespace under
+// the patch row id. Drift there leaves every other test green while Settings
+// serves built-in defaults forever.
+describe('settings namespace / patch row id', () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const patch = readFileSync(join(here, '..', 'cordis.patch.yml'), 'utf8');
+
+  it('SETTINGS_NS matches the inserted row id in cordis.patch.yml', () => {
+    // Line-ending agnostic: an anchored `$` is fragile across CRLF checkouts.
+    const ids = [...patch.matchAll(/^ {4}- id: ([^\s\r\n]+)/gm)].map((m) => m[1]);
+    assert.deepEqual(ids, [SETTINGS_NS], 'exactly one inserted row, id === SETTINGS_NS');
+  });
+
+  it('the client half asks for the same id', () => {
+    const client = readFileSync(join(here, '..', 'lib', 'client.js'), 'utf8');
+    assert.match(client, /TASKS_SETTINGS_NS = "dsh-tasks-manager"/);
+    assert.match(client, /const configForms = ctx\.get\("configForms"\)/);
+    assert.doesNotMatch(client, /settingsScope/);
+  });
+});
+
+describe('settingsValueOf (host live read)', () => {
+  it('reads the namespace through describe(), keyed by the entry id', () => {
+    const service = {
+      describe: () => [
+        { ns: 'some-other-entry', value: { baseBranch: 'nope' } },
+        { ns: SETTINGS_NS, value: { baseBranch: 'main', workerCanFinish: true } },
+      ],
+    };
+    assert.deepEqual(settingsValueOf(service), { baseBranch: 'main', workerCanFinish: true });
+  });
+
+  it('is safe on a missing service, a missing namespace and a throwing one', () => {
+    assert.equal(settingsValueOf(undefined), undefined);
+    assert.equal(settingsValueOf({}), undefined);
+    assert.equal(settingsValueOf({ describe: () => [] }), undefined);
+    assert.equal(settingsValueOf({ describe: () => { throw new Error('boom'); } }), undefined);
   });
 });

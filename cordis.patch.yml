@@ -1,7 +1,15 @@
 # dsh-tasks-manager bundle patch: inserts the taskQueue row over the composed profile.
 # The row registers the /tasks command, the system-prompt section (policy band,
-# order 50, English), a settings namespace shared with the web client, and the
-# six queue tools. Config is validated at plugin load.
+# order 50, English), the six queue tools, and — through the VOLATILE fields of
+# the plugin's exported Config schema — the settings namespace the web client
+# reads and writes. Config is validated at plugin load.
+#
+# SETTINGS NAMESPACE: since DSH 0.1.7-rc.2 the namespace is keyed by this row's
+# `id` below ("dsh-tasks-manager"), not by a namespace the plugin registers
+# itself, and it is built only from the volatile Config fields (baseBranch,
+# workerCanFinish, workerCanMerge, workerRules, workerModel). The row id is the
+# key preferences are persisted under and must stay in sync with SETTINGS_NS in
+# lib/config.js (asserted by test/config.test.js).
 #
 # order 50 is deliberate: the tasks:policy section (approve/close are USER-ONLY,
 # never the model) must sit right after the persona, before every tool
@@ -19,4 +27,10 @@
         enabled: true
         order: 50
         allowCommand: true
+        # Settings namespace (per-user, editable in Settings -> Tasks). These
+        # pre-seed the defaults for a fresh install; a saved value wins.
         baseBranch: ""
+        workerCanFinish: false
+        workerCanMerge: false
+        workerRules: ""
+        workerModel: ""

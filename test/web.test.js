@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
 import { approve, appendNote, editDraft, enqueue, ensureWorkspace, get } from '../lib/queue.js';
 import { createWebHandlers, routeWebCall } from '../lib/web.js';
+import { fakeCtxGet } from './support/fake-settings.js';
 
 // Mock store: in-memory DB + two-workspace registry. No DSH boot needed.
 function mockStore() {
@@ -42,7 +43,7 @@ describe('web RPC (panel channel)', () => {
   it('snapshot reports the live finish mode from settings', async () => {
     const { store } = mockStore();
     const handlers = createWebHandlers(store, {
-      ctx: { get: (key) => key === 'settings' ? { get: () => ({ workerCanFinish: true }) } : undefined },
+      ctx: fakeCtxGet({ workerCanFinish: true }),
     });
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.equal(out.ok, true);
@@ -53,7 +54,7 @@ describe('web RPC (panel channel)', () => {
   it('snapshot reports the live merge mode from settings', async () => {
     const { store } = mockStore();
     const handlers = createWebHandlers(store, {
-      ctx: { get: (key) => key === 'settings' ? { get: () => ({ workerCanMerge: true }) } : undefined },
+      ctx: fakeCtxGet({ workerCanMerge: true }),
     });
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.equal(out.ok, true);
@@ -64,7 +65,7 @@ describe('web RPC (panel channel)', () => {
   it('snapshot reports the live worker rules from settings', async () => {
     const { store } = mockStore();
     const handlers = createWebHandlers(store, {
-      ctx: { get: (key) => key === 'settings' ? { get: () => ({ workerRules: 'alla fine del lavoro aggiorna la wiki' }) } : undefined },
+      ctx: fakeCtxGet({ workerRules: 'alla fine del lavoro aggiorna la wiki' }),
     });
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.equal(out.ok, true);
@@ -279,7 +280,7 @@ describe('web RPC (panel channel)', () => {
   it('close promotion spawns the next worker through the shared helper', async () => {
     const { store } = mockStore();
     // No hooks.spawnWorker: the real path (spawnForPromotion) runs and fails
-    // closed without agents — the promotion still stands with the error.
+    // closed without agents ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â the promotion still stands with the error.
     const handlers = createWebHandlers(store, { ctx: { get: () => undefined } });
     const one = enqueue(store.getDb(), 1, { type: 'bug', title: 'First', spec: '' });
     const two = enqueue(store.getDb(), 1, { type: 'bug', title: 'Second', spec: '' });
