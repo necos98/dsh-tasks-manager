@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { pluginPresetsRoot, PRESET_IDS, syncPluginPresets, USER_PRESET_DIR, userPresetRoot } from '../lib/presets-sync.js';
 import { CONFIG_KEYS, resolveConfig } from '../lib/config.js';
 import { bootHost } from './support/host.js';
+import { settingsValueOf } from '../lib/config.js';
 
 function tmpRoot() { return mkdtempSync(join(tmpdir(), 'dsh-presets-sync-')); }
 
@@ -121,7 +122,7 @@ describe('presets-sync', () => {
   it('syncPresets:false boot leaves the user root alone', async () => {
     const host = await bootHost({ config: { syncPresets: false } });
     try {
-      assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
+      assert.deepEqual(settingsValueOf(host.ctx.get('settings')), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
       let entries = [];
       try {
         entries = readdirSync(join(host.dshHome, USER_PRESET_DIR));

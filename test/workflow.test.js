@@ -8,6 +8,8 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { bootHost } from './support/host.js';
 import { callTool, runCommand, toolNames } from './support/calls.js';
+import { SETTINGS_NS, settingsValueOf } from '../lib/config.js';
+import { TASKS_NS } from './support/fake-settings.js';
 
 describe('workflow on the real host', () => {
   let host;
@@ -21,21 +23,21 @@ describe('workflow on the real host', () => {
   });
 
   it('flipping workerCanFinish mounts/unmounts finish_task live', async () => {
-    // Production path: an external settings edit re-resolves + emits
-    // settings/updated, and the gate resyncs (publish = provider push).
+    // Production path: an external settings edit emits the document
+    // invalidation and the gate re-reads + re-syncs (publish = provider push).
     const settings = host.ctx.get('settings');
-    settings.publish({ tasks: { workerCanFinish: true } });
+    settings.publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '' } });
     assert.deepEqual(toolNames(host.ctx), [
       'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
-    settings.publish({ tasks: { workerCanFinish: false } });
+    settings.publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' } });
     assert.deepEqual(toolNames(host.ctx), [
       'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
   });
 
   it('resolves the tasks settings namespace with defaults (FIX-05/06)', () => {
-    assert.deepEqual(host.ctx.get('settings').get('tasks'), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
+    assert.deepEqual(settingsValueOf(host.ctx.get('settings')), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
   });
 
   it('/tasks returns a CommandResult (FIX-04 acceptance)', async () => {
@@ -193,13 +195,13 @@ describe('workflow on the real host', () => {
   it('worker finish on the real host promotes and spawns (no limbo)', async () => {
     // The reported bug: task 2 goes active on finish_task but no chat opens.
     // On the real host the spawn fails closed (no agents service), so the
-    // promotion stands WITH the error attached — never a silent limbo.
+    // promotion stands WITH the error attached ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â never a silent limbo.
     // Needs workerCanFinish:true (default is manual).
     const rt = await bootHost({
       workspaces: [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-user', 'sess-worker'] }],
     });
     try {
-      rt.ctx.get('settings').publish({ tasks: { workerCanFinish: true } });
+      rt.ctx.get('settings').publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '' } });
       const a = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Rt one' });
       const b = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Rt two' });
       await callTool(rt.ctx, 'sess-user', 'approve_task', { id: a.value.id });

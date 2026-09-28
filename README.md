@@ -112,7 +112,28 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 
 ## Config
 
-`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`), `syncPresets` (default true), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well).
+`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`), `syncPresets` (default true), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerCanMerge` (default false), `workerRules` (default `""`), `workerModel` (default `""`).
+
+### The settings namespace
+
+Since **DSH 0.1.7-rc.2** the five per-user fields above — `baseBranch`,
+`workerCanFinish`, `workerCanMerge`, `workerRules`, `workerModel` — are the
+**volatile** fields of this plugin's exported `Config` schema, and that is what
+the harness turns into the entry's settings namespace:
+
+- the namespace is keyed by the profile **entry id** (`dsh-tasks-manager`, i.e.
+  the `id` in `cordis.patch.yml`), **not** by a name the plugin registers. The
+  plugin no longer calls `ctx.settings.register(ns, schema)`;
+- an entry whose `Config` has **no** volatile field produces **no** namespace at
+  all, and the browser half then stays `pending (waiting for service:
+  settingsScope)` — the old `settingsScope` service is gone, replaced by the
+  `configForms` service (`ctx.configForms.get("dsh-tasks-manager")`);
+- the other `Config` keys are deployment configuration and stay out of the
+  settings form. That is deliberate: `section` is the policy text and
+  `updateToken` is a secret, and neither should reach the browser.
+
+Preferences are therefore persisted under `dsh-tasks-manager`, not under the old
+`tasks` key. See the upgrade note below.
 
 ### Releasing (what the updater reads)
 
@@ -135,3 +156,27 @@ single authority, hand edits in the installed copy are discarded on next boot.
 `syncPresets: false` disables the copy entirely.
 
 `order: 50` places the `tasks:policy` section right after the persona: the queue's USER-ONLY rule (approve/close are never the model) must precede every tool description, otherwise triage/worker prompts read as ordinary tool guidance. Official placements (`TOOL_READ=1100` etc.) sit far below; policy first is deliberate.
+
+## Upgrading
+
+This release requires **DSH ≥ 0.1.7-rc.2**. Older builds registered a settings
+namespace named `tasks`; the harness now derives it from the entry id, so it is
+**`dsh-tasks-manager`**. There is no migration map for the old key: preferences
+saved by an earlier version under `tasks` (finish/merge toggles, `baseBranch`,
+`workerRules`, `workerModel`) are **not** migrated and fall back to the
+`cordis.patch.yml` defaults. Re-enter them in Settings → Tasks; they persist
+from then on. A hand-written `tasks:` block in `~/.dsh/settings.yaml` is
+ignored for the same reason. Nothing else about the install changes — the
+plugin's patch row id stays `dsh-tasks-manager`.
+
+## Development
+
+```
+pnpm install      # the test host resolves the real DSH packages
+npm test          # node --test
+npm run check     # syntax + preset validation
+```
+
+The host is exercised against the real `dsh-settings`/`dsh-tools` services
+(`test/support/host.js` boots a minimal Cordis host); only the workspace
+registry and the settings backend are stubbed.

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
 import { approve, close, enqueue, ensureWorkspace } from '../lib/queue.js';
 import { makeToolDefinitions } from '../lib/tools.js';
+import { fakeSettings } from './support/fake-settings.js';
 
 // Mock store: in-memory DB + fake two-workspace registry. No DSH boot needed.
 function mockStore() {
@@ -446,7 +447,7 @@ describe('tool execute (structured values + render)', () => {
   it('scoped worker entry (preset path) spawns on finish promotion', async () => {
     // The production worker resolves finish_task to the SCOPED registration
     // (preset mounts dsh-tasks-manager/worker-tools, not the host entry),
-    // so the hook must live there too — otherwise the promoted task limbos.
+    // so the hook must live there too ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â otherwise the promoted task limbos.
     // The scoped runtime owns its DB file (config dshHome); the test opens
     // the SAME file directly to file fixtures, then drives the scoped defs.
     const { mkdtempSync, rmSync } = await import('node:fs');
@@ -472,7 +473,7 @@ describe('tool execute (structured values + render)', () => {
         }
         if (deps.includes('settings')) {
           // Automatic mode for this test: workerCanFinish true.
-          cb({ settings: { get: () => ({ workerCanFinish: true }) } });
+          cb({ settings: fakeSettings({ workerCanFinish: true }) });
         }
       },
     };
@@ -522,7 +523,7 @@ describe('tool execute (structured values + render)', () => {
           cb({ tools: { register: (d) => { registered.push(d); return () => {}; } } });
         }
         if (deps.includes('settings')) {
-          cb({ settings: { get: () => ({ workerCanFinish: false }) } });
+          cb({ settings: fakeSettings({ workerCanFinish: false }) });
         }
       },
     };
