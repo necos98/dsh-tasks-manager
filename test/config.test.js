@@ -39,7 +39,7 @@ describe('config guard', () => {
 
   it('CONFIG_KEYS match the documented keys exactly', () => {
     assert.deepEqual([...CONFIG_KEYS].sort(), [
-      'allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section', 'syncPresets',
+      'allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section',
       'updateIncludePrerelease', 'updateProfile', 'updateProfileDir', 'updateRepository', 'updateTimeoutMs', 'updateToken',
       'workerCanFinish', 'workerCanMerge', 'workerModel', 'workerRules',
     ]);
@@ -128,7 +128,7 @@ describe('settings namespace (volatile Config fields)', () => {
   it('resolves defaults like every consumer expects', () => {
     assert.deepEqual(plain(Config({})), {
       enabled: false, order: 50, allowCommand: true, section: Config.dict.section.meta.default,
-      dshHome: '', syncPresets: true, updateRepository: 'necos98/dsh-tasks-manager',
+      dshHome: '', updateRepository: 'necos98/dsh-tasks-manager',
       updateProfile: '', updateIncludePrerelease: false, updateTimeoutMs: 180000,
       updateProfileDir: '', updateToken: '',
       baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '',

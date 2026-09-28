@@ -1,19 +1,36 @@
 // Validate the shipped agent presets against the installed DSH plugins.
 //
-// A preset row is only correct for the DSH build it mounts on: the loader
-// parses `agent.cordis.yml` with cordis-plugin-include's entry-list dialect and
-// then validates every row's `config` against that plugin's own `Config` schema
-// (the same `~standard.validate` call the loader makes). This guard runs both
-// steps offline, so a renamed or changed plugin field (for example persona's
-// `text` -> `prefix`) fails here instead of when the user switches preset.
+// A preset is only correct for the DSH build it mounts on. Since DSH
+// 0.1.7-rc.2 a preset is NOT a directory under $DSH_HOME/.agent-presets (that
+// root is read by nothing any more): it is an `@deepseek-ai/dsh-agent-preset`
+// DECLARATION carried by a bundle patch. So this guard walks the patch files
+// this package lists in its own `dsh.bundle.patch`, parses each one the way the
+// loader does (cordis-plugin-include's entry-list dialect) and then validates
+// every row's `config` against that plugin's own `Config` schema (the same
+// `~standard.validate` call the loader makes at mount). A preset declaration is
+// descended into, so `config.plugins` is checked row by row: a renamed or
+// changed plugin field (for example persona's `text` -> `prefix`) fails here
+// instead of when the user switches preset.
 //
 // Skips with a notice when no DSH install is reachable (a bare checkout).
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PRESET_ROOT = join(root, "presets");
+const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+
+/** One path relative to the package root, always with forward slashes. */
+function rel(file) {
+  return file.slice(root.length + 1).split(sep).join("/");
+}
+
+/** The bundle patch files this package ships, in composition order. */
+function patchFiles() {
+  const patch = pkg.dsh?.bundle?.patch;
+  const list = Array.isArray(patch) ? patch : patch === undefined ? [] : [patch];
+  return list.map((rel) => join(root, rel));
+}
 
 /** `node_modules` roots that may hold the DSH packages, in priority order. */
 function moduleRoots() {
@@ -53,7 +70,6 @@ function resolveRow(name) {
     return dir === undefined ? { missing: true } : { file: entryFile(dir) };
   }
   if (name.startsWith("dsh-tasks-manager/")) {
-    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
     const rel = pkg.exports?.["./" + name.slice("dsh-tasks-manager/".length)];
     return rel === undefined ? { missing: true } : { file: join(root, rel) };
   }
@@ -66,6 +82,14 @@ function* rows(entries) {
   for (const entry of entries) {
     yield entry;
     if (Array.isArray(entry.config)) yield* rows(entry.config);
+  }
+}
+
+/** Every row a parsed bundle patch carries: inserts, then id-targeted overrides. */
+function* patchRows(entries) {
+  for (const entry of entries) {
+    if (Array.isArray(entry?.insert)) yield* rows(entry.insert);
+    else if (entry?.name !== undefined) yield entry;
   }
 }
 
@@ -92,6 +116,10 @@ async function checkRow(entry) {
     const path = Array.isArray(first?.path) ? first.path.join(".") : "";
     return { status: "fail", reason: "invalid config: " + (first?.message ?? "unknown") + (path === "" ? "" : " (at " + path + ")") };
   }
+  // A preset DECLARATION nests its whole entry list: check every child row.
+  if (entry.name === "@deepseek-ai/dsh-agent-preset" && Array.isArray(entry.config?.plugins)) {
+    return { status: "ok", children: [...rows(entry.config.plugins)] };
+  }
   return { status: "ok" };
 }
 
@@ -106,25 +134,42 @@ const yamlMod = await import(pathToFileURL(entryFile(yamlDir)).href);
 const yaml = yamlMod.default ?? yamlMod;
 
 let failures = 0;
-const presets = readdirSync(PRESET_ROOT, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
-if (presets.length === 0) {
-  console.log("validate-presets: no presets found");
+let checked = 0;
+const files = patchFiles();
+if (files.length === 0) {
+  console.log("validate-presets: the package declares no bundle patch");
   process.exit(0);
 }
-for (const preset of presets) {
-  const file = join(PRESET_ROOT, preset, "agent.cordis.yml");
+for (const file of files) {
+  if (!existsSync(file)) {
+    failures++;
+    console.log("patch " + rel(file) + ": MISSING");
+    continue;
+  }
+  console.log("patch " + rel(file));
   const entries = yaml.load(readFileSync(file, "utf8"), { schema: includeMod.entryListSchema });
-  console.log("preset " + preset);
-  for (const entry of rows(entries)) {
+  for (const entry of patchRows(entries)) {
     const outcome = await checkRow(entry);
-    const label = (entry.disabled === undefined ? "" : " [disabled]") + (entry.config === undefined || Array.isArray(entry.config) ? "" : "");
+    const label = entry.disabled === undefined ? "" : " [disabled]";
     if (outcome.status === "fail") {
       failures++;
       console.log("  FAIL " + entry.id + " (" + entry.name + ")" + label + ": " + outcome.reason);
-    } else {
-      console.log("  " + (outcome.status === "ok" ? "ok  " : "----") + " " + entry.id + " (" + entry.name + ")" + label);
+      continue;
+    }
+    checked++;
+    console.log("  " + (outcome.status === "ok" ? "ok  " : "----") + " " + entry.id + " (" + entry.name + ")" + label);
+    for (const child of outcome.children ?? []) {
+      const childOutcome = await checkRow(child);
+      const childLabel = child.disabled === undefined ? "" : " [disabled]";
+      if (childOutcome.status === "fail") {
+        failures++;
+        console.log("  FAIL " + child.id + " (" + child.name + ")" + childLabel + ": " + childOutcome.reason);
+      } else {
+        checked++;
+        console.log("    " + (childOutcome.status === "ok" ? "ok  " : "----") + " " + child.id + " (" + child.name + ")" + childLabel);
+      }
     }
   }
 }
-console.log(failures === 0 ? "validate-presets: all rows valid" : "validate-presets: " + failures + " row(s) invalid");
+console.log(failures === 0 ? "validate-presets: " + checked + " row(s) valid" : "validate-presets: " + failures + " row(s) invalid");
 process.exit(failures === 0 ? 0 : 1);
