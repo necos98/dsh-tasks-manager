@@ -3,6 +3,22 @@
 One version covers the whole plugin: the tag `v<version>` names the `package.json` version, and the
 updater in Settings → Tasks offers the newest tag it can read.
 
+## [0.4.0]
+
+Two new capabilities: worker git modes, and per-workspace project rules with commit language/style.
+
+- **Worker git modes (#27).** The `workerCanMerge` boolean is replaced by the
+  `workerGitMode` setting (default `branch-automerge`, plus `in-place-local` and
+  `in-place-push`); the spawn message names the mode as the authority, the worker
+  preset gates three sections on it, and Settings → Tasks gains a Git-workflow card
+  with a 3-way selector (`baseBranch` applies only in branch-automerge mode).
+- **Per-workspace project rules, commit language and message style (#28).** The
+  global `workerRules` setting is removed in favour of a per-workspace `rules`
+  column (DB v7) with get/set endpoints; new `commitLanguage` (default English)
+  and `messageStyle` (minimal/extended) settings, a Project-rules card in the
+  Tasks panel, and the spawn prompt carries language/style lines plus the
+  workspace rules section.
+
 ## [0.3.1]
 
 The two agent presets mount again on DSH ≥ 0.1.7-rc.2, as bundle declarations
