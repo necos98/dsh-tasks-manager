@@ -36,7 +36,7 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.value.workspace.id, 'a');
     // Manual defaults without a settings ctx.
     assert.equal(out.value.workerCanFinish, false);
-    assert.equal(out.value.workerCanMerge, false);
+    assert.equal(out.value.workerGitMode, 'branch-automerge');
     assert.equal(out.value.workerRules, '');
   });
 
@@ -48,17 +48,17 @@ describe('web RPC (panel channel)', () => {
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.equal(out.ok, true);
     assert.equal(out.value.workerCanFinish, true);
-    assert.equal(out.value.workerCanMerge, false);
+    assert.equal(out.value.workerGitMode, 'branch-automerge');
   });
 
-  it('snapshot reports the live merge mode from settings', async () => {
+  it('snapshot reports the live git mode from settings', async () => {
     const { store } = mockStore();
     const handlers = createWebHandlers(store, {
-      ctx: fakeCtxGet({ workerCanMerge: true }),
+      ctx: fakeCtxGet({ workerGitMode: 'in-place-local' }),
     });
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.equal(out.ok, true);
-    assert.equal(out.value.workerCanMerge, true);
+    assert.equal(out.value.workerGitMode, 'in-place-local');
     assert.equal(out.value.workerCanFinish, false);
   });
 

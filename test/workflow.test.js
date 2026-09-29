@@ -26,18 +26,18 @@ describe('workflow on the real host', () => {
     // Production path: an external settings edit emits the document
     // invalidation and the gate re-reads + re-syncs (publish = provider push).
     const settings = host.ctx.get('settings');
-    settings.publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '' } });
+    settings.publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: true, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' } });
     assert.deepEqual(toolNames(host.ctx), [
       'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'finish_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
-    settings.publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' } });
+    settings.publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' } });
     assert.deepEqual(toolNames(host.ctx), [
       'approve_task', 'close_task', 'edit_draft', 'enqueue_task', 'get_my_task', 'list_tasks', 'note_task', 'search_tasks', 'task_detail',
     ]);
   });
 
   it('resolves the tasks settings namespace with defaults (FIX-05/06)', () => {
-    assert.deepEqual(settingsValueOf(host.ctx.get('settings')), { baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
+    assert.deepEqual(settingsValueOf(host.ctx.get('settings')), { baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' });
   });
 
   it('/tasks returns a CommandResult (FIX-04 acceptance)', async () => {
@@ -201,7 +201,7 @@ describe('workflow on the real host', () => {
       workspaces: [{ id: 'a', path: 'C:/repo-a', sessionIds: ['sess-user', 'sess-worker'] }],
     });
     try {
-      rt.ctx.get('settings').publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '' } });
+      rt.ctx.get('settings').publish({ [TASKS_NS]: { baseBranch: '', workerCanFinish: true, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' } });
       const a = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Rt one' });
       const b = await callTool(rt.ctx, 'sess-user', 'enqueue_task', { type: 'bug', title: 'Rt two' });
       await callTool(rt.ctx, 'sess-user', 'approve_task', { id: a.value.id });

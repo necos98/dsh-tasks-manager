@@ -7,7 +7,7 @@
 # SETTINGS NAMESPACE: since DSH 0.1.7-rc.2 the namespace is keyed by this row's
 # `id` below ("dsh-tasks-manager"), not by a namespace the plugin registers
 # itself, and it is built only from the volatile Config fields (baseBranch,
-# workerCanFinish, workerCanMerge, workerRules, workerModel). The row id is the
+# workerCanFinish, workerGitMode, workerRules, workerModel). The row id is the
 # key preferences are persisted under and must stay in sync with SETTINGS_NS in
 # lib/config.js (asserted by test/config.test.js).
 #
@@ -31,6 +31,6 @@
         # pre-seed the defaults for a fresh install; a saved value wins.
         baseBranch: ""
         workerCanFinish: false
-        workerCanMerge: false
+        workerGitMode: branch-automerge
         workerRules: ""
         workerModel: ""

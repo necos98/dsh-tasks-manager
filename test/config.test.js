@@ -41,7 +41,7 @@ describe('config guard', () => {
     assert.deepEqual([...CONFIG_KEYS].sort(), [
       'allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section',
       'updateIncludePrerelease', 'updateProfile', 'updateProfileDir', 'updateRepository', 'updateTimeoutMs', 'updateToken',
-      'workerCanFinish', 'workerCanMerge', 'workerModel', 'workerRules',
+      'workerCanFinish', 'workerGitMode', 'workerModel', 'workerRules',
     ]);
   });
 
@@ -131,10 +131,10 @@ describe('settings namespace (volatile Config fields)', () => {
       dshHome: '', updateRepository: 'necos98/dsh-tasks-manager',
       updateProfile: '', updateIncludePrerelease: false, updateTimeoutMs: 180000,
       updateProfileDir: '', updateToken: '',
-      baseBranch: '', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
     });
     assert.deepEqual(settingsOf(Config({ baseBranch: 'main' })), {
-      baseBranch: 'main', workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '',
+      baseBranch: 'main', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
     });
   });
 
@@ -144,21 +144,28 @@ describe('settings namespace (volatile Config fields)', () => {
 
   it('workerCanFinish defaults false and validates booleans', () => {
     assert.deepEqual(settingsOf(Config({ workerCanFinish: true })), {
-      baseBranch: '', workerCanFinish: true, workerCanMerge: false, workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: true, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
     });
     assert.throws(() => Config({ workerCanFinish: 'yes' }), /workerCanFinish/);
   });
 
-  it('workerCanMerge defaults false and validates booleans', () => {
-    assert.deepEqual(settingsOf(Config({ workerCanMerge: true })), {
-      baseBranch: '', workerCanFinish: false, workerCanMerge: true, workerRules: '', workerModel: '',
+  it('workerGitMode defaults branch-automerge and accepts only the 3 modes', () => {
+    assert.deepEqual(settingsOf(Config({ workerGitMode: 'in-place-local' })), {
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'in-place-local', workerRules: '', workerModel: '',
     });
-    assert.throws(() => Config({ workerCanMerge: 'yes' }), /workerCanMerge/);
+    assert.deepEqual(settingsOf(Config({ workerGitMode: 'in-place-push' })), {
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'in-place-push', workerRules: '', workerModel: '',
+    });
+    assert.deepEqual(settingsOf(Config({ workerGitMode: 'branch-automerge' })), {
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
+    });
+    assert.throws(() => Config({ workerGitMode: 'x' }), /workerGitMode/);
+    assert.throws(() => Config({ workerGitMode: true }), /workerGitMode/);
   });
 
   it('workerRules defaults to empty string and stays verbatim', () => {
     assert.deepEqual(settingsOf(Config({ workerRules: 'alla fine del lavoro aggiorna la wiki' })), {
-      baseBranch: '', workerCanFinish: false, workerCanMerge: false,
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge',
       workerRules: 'alla fine del lavoro aggiorna la wiki', workerModel: '',
     });
     assert.throws(() => Config({ workerRules: 42 }), /workerRules/);
@@ -166,7 +173,7 @@ describe('settings namespace (volatile Config fields)', () => {
 
   it('workerModel defaults to empty string and validates strings', () => {
     assert.deepEqual(settingsOf(Config({ workerModel: 'anthropic/claude-3.5-sonnet' })), {
-      baseBranch: '', workerCanFinish: false, workerCanMerge: false,
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge',
       workerRules: '', workerModel: 'anthropic/claude-3.5-sonnet',
     });
     assert.throws(() => Config({ workerModel: 42 }), /workerModel/);
