@@ -39,9 +39,9 @@ describe('config guard', () => {
 
   it('CONFIG_KEYS match the documented keys exactly', () => {
     assert.deepEqual([...CONFIG_KEYS].sort(), [
-      'allowCommand', 'baseBranch', 'dshHome', 'enabled', 'order', 'section',
+      'allowCommand', 'baseBranch', 'commitLanguage', 'dshHome', 'enabled', 'messageStyle', 'order', 'section',
       'updateIncludePrerelease', 'updateProfile', 'updateProfileDir', 'updateRepository', 'updateTimeoutMs', 'updateToken',
-      'workerCanFinish', 'workerGitMode', 'workerModel', 'workerRules',
+      'workerCanFinish', 'workerGitMode', 'workerModel',
     ]);
   });
 
@@ -131,10 +131,10 @@ describe('settings namespace (volatile Config fields)', () => {
       dshHome: '', updateRepository: 'necos98/dsh-tasks-manager',
       updateProfile: '', updateIncludePrerelease: false, updateTimeoutMs: 180000,
       updateProfileDir: '', updateToken: '',
-      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
     });
     assert.deepEqual(settingsOf(Config({ baseBranch: 'main' })), {
-      baseBranch: 'main', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
+      baseBranch: 'main', workerCanFinish: false, workerGitMode: 'branch-automerge', commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
     });
   });
 
@@ -144,37 +144,50 @@ describe('settings namespace (volatile Config fields)', () => {
 
   it('workerCanFinish defaults false and validates booleans', () => {
     assert.deepEqual(settingsOf(Config({ workerCanFinish: true })), {
-      baseBranch: '', workerCanFinish: true, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: true, workerGitMode: 'branch-automerge', commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
     });
     assert.throws(() => Config({ workerCanFinish: 'yes' }), /workerCanFinish/);
   });
 
   it('workerGitMode defaults branch-automerge and accepts only the 3 modes', () => {
     assert.deepEqual(settingsOf(Config({ workerGitMode: 'in-place-local' })), {
-      baseBranch: '', workerCanFinish: false, workerGitMode: 'in-place-local', workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'in-place-local', commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
     });
     assert.deepEqual(settingsOf(Config({ workerGitMode: 'in-place-push' })), {
-      baseBranch: '', workerCanFinish: false, workerGitMode: 'in-place-push', workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'in-place-push', commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
     });
     assert.deepEqual(settingsOf(Config({ workerGitMode: 'branch-automerge' })), {
-      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '',
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge', commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
     });
     assert.throws(() => Config({ workerGitMode: 'x' }), /workerGitMode/);
     assert.throws(() => Config({ workerGitMode: true }), /workerGitMode/);
   });
 
-  it('workerRules defaults to empty string and stays verbatim', () => {
-    assert.deepEqual(settingsOf(Config({ workerRules: 'alla fine del lavoro aggiorna la wiki' })), {
+  it('commitLanguage defaults to English and validates strings', () => {
+    assert.deepEqual(settingsOf(Config({ commitLanguage: 'Italian' })), {
       baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge',
-      workerRules: 'alla fine del lavoro aggiorna la wiki', workerModel: '',
+      commitLanguage: 'Italian', messageStyle: 'extended', workerModel: '',
     });
-    assert.throws(() => Config({ workerRules: 42 }), /workerRules/);
+    assert.throws(() => Config({ commitLanguage: 42 }), /commitLanguage/);
+  });
+
+  it('messageStyle defaults to extended and accepts only minimal/extended', () => {
+    assert.deepEqual(settingsOf(Config({ messageStyle: 'minimal' })), {
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge',
+      commitLanguage: 'English', messageStyle: 'minimal', workerModel: '',
+    });
+    assert.deepEqual(settingsOf(Config({ messageStyle: 'extended' })), {
+      baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge',
+      commitLanguage: 'English', messageStyle: 'extended', workerModel: '',
+    });
+    assert.throws(() => Config({ messageStyle: 'x' }), /messageStyle/);
+    assert.throws(() => Config({ messageStyle: true }), /messageStyle/);
   });
 
   it('workerModel defaults to empty string and validates strings', () => {
     assert.deepEqual(settingsOf(Config({ workerModel: 'anthropic/claude-3.5-sonnet' })), {
       baseBranch: '', workerCanFinish: false, workerGitMode: 'branch-automerge',
-      workerRules: '', workerModel: 'anthropic/claude-3.5-sonnet',
+      commitLanguage: 'English', messageStyle: 'extended', workerModel: 'anthropic/claude-3.5-sonnet',
     });
     assert.throws(() => Config({ workerModel: 42 }), /workerModel/);
   });

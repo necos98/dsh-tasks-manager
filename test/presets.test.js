@@ -113,7 +113,16 @@ describe('preset declarations (bundle patches)', () => {
     assert.equal(existsSync(join(root, 'lib', 'presets-sync.js')), false, 'presets-sync.js');
     assert.equal(CONFIG_KEYS.includes('syncPresets'), false, 'syncPresets config key');
     // The live settings namespace is untouched by the migration.
-    assert.deepEqual([...SETTINGS_KEYS].sort(), ['baseBranch', 'workerCanFinish', 'workerGitMode', 'workerModel', 'workerRules']);
+    assert.deepEqual([...SETTINGS_KEYS].sort(), ['baseBranch', 'commitLanguage', 'messageStyle', 'workerCanFinish', 'workerGitMode', 'workerModel']);
+  });
+
+  it('worker preset names the spawn language/style instead of hardcoding English', () => {
+    const text = shipped('presets/taskqueue-worker.patch.yml');
+    assert.doesNotMatch(text, /ALWAYS English/);
+    assert.doesNotMatch(text, /stays English regardless/);
+    assert.doesNotMatch(text, /commits and reports always English/);
+    assert.match(text, /Commit\/PR language \+ Message style lines/);
+    assert.match(text, /spawn language/);
   });
 
   it('worker preset gates the 3 git modes on the spawn message (--no-ff, abort on conflict)', () => {

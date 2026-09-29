@@ -7,7 +7,7 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   approves (`approve_task`) or discards each.
 - The queue promotes the oldest `queued` task to `active` when the slot frees;
   EVERY promotion auto-spawns its worker chat (`taskqueue-worker` preset,
-  English prompt) bound via `worker_session` — approving a task, closing
+  spawn-language prompt) bound via `worker_session` — approving a task, closing
   one from the panel, AND the worker finishing its own task via
   `finish_task` all open the next chat, so an active task never sits in
   limbo with no session. A spawn failure never rolls the promotion back:
@@ -56,8 +56,19 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   ` (task #<seq>)` message suffix. `in-place-push` is the same plus one
   plain trailing `git push` of the current branch after a green suite (push
   rejected → stop, report, wait). The spawn message tells the worker its
-  mode (`Git mode for this task is <mode>`); the worker preset follows only
-  the named section. `baseBranch` applies to branch-automerge only.
+  mode (`Git mode for this task is <mode>`), its language (`Commit/PR
+  language: <lang>`, from the `tasks.commitLanguage` setting, default
+  `"English"`) and its verbosity (`Message style is minimal|extended…`,
+  from `tasks.messageStyle`, default `"extended"`); the worker preset follows
+  only the named sections. `baseBranch` applies to branch-automerge only.
+  Minimal style means one-line commits (`` `<imperative summary> (task #N)` ``)
+  and PR title + max 2-line body with no sections; extended means commit
+  subject + body (what/why) and PR with What/Verified/Notes sections.
+- Project rules (Tasks panel → "Project rules", `workspaces.rules`): free
+  verbatim text appended to the worker's first message under "Project rules
+  for this workspace", never to the system prompt. Per workspace: editing it
+  changes only that workspace. Replaces the old global `workerRules` setting
+  (removed): each workspace starts from empty rules.
 - Manual GitHub updater (Settings → Tasks → "Updates"): **Check for
   updates** reads the RELEASE TAGS of `github.com/necos98/dsh-tasks-manager`
   and compares them with the version installed in the profile;
@@ -97,8 +108,8 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   session is cleared and replaced by a fresh worker chat on re-promotion.
   Requeueing touches no git state: no merge, no revert, no branch delete.
 - `approve_task`/`close_task` are USER-ONLY (panel buttons): never mounted as model tools.
-- Everything is English: tool fields (`type/title/state/outcome`), presets,
-  panel, prompts, and specs.
+- Tool fields (`type/title/state/outcome`), presets, panel and prompts default
+  to English; commits/PRs/reports follow the per-entry `commitLanguage`.
 
 See `design-tasks-simple.md` for the full design (Italian, historical).
 
@@ -126,12 +137,12 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 
 ## Config
 
-`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`, locates the queue database), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerGitMode` (default `"branch-automerge"`), `workerRules` (default `""`), `workerModel` (default `""`).
+`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`, locates the queue database), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerGitMode` (default `"branch-automerge"`), `commitLanguage` (default `"English"`), `messageStyle` (default `"extended"`), `workerModel` (default `""`).
 
 ### The settings namespace
 
-Since **DSH 0.1.7-rc.2** the five per-user fields above — `baseBranch`,
-`workerCanFinish`, `workerGitMode`, `workerRules`, `workerModel` — are the
+Since **DSH 0.1.7-rc.2** the six per-user fields above — `baseBranch`,
+`workerCanFinish`, `workerGitMode`, `commitLanguage`, `messageStyle`, `workerModel` — are the
 **volatile** fields of this plugin's exported `Config` schema, and that is what
 the harness turns into the entry's settings namespace:
 
@@ -189,11 +200,15 @@ This release requires **DSH ≥ 0.1.7-rc.2**. Older builds registered a settings
 namespace named `tasks`; the harness now derives it from the entry id, so it is
 **`dsh-tasks-manager`**. There is no migration map for the old key: preferences
 saved by an earlier version under `tasks` (finish toggle, git mode,
-`baseBranch`, `workerRules`, `workerModel`) are **not** migrated and fall back to the
+`baseBranch`, `commitLanguage`, `messageStyle`, `workerModel`) are **not** migrated and fall back to the
 `cordis.patch.yml` defaults. Re-enter them in Settings → Tasks; they persist
 from then on. A hand-written `tasks:` block in `~/.dsh/settings.yaml` is
 ignored for the same reason. Nothing else about the install changes — the
 plugin's patch row id stays `dsh-tasks-manager`.
+The old global `workerRules` setting is removed (replaced by per-workspace
+project rules): saved `workerRules` values are **not** migrated and every
+workspace starts from empty rules. Old databases migrate to schema v7 with
+`rules=''` and keep working.
 
 Since **0.3.1** the two presets are shipped as bundle declarations instead of
 being copied into `$DSH_HOME/.agent-presets` (see "How the presets are

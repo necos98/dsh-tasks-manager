@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { openMemory } from '../lib/db.js';
-import { approve, appendNote, bindSession, close, editDraft, enqueue, ensureWorkspace, get, list, moveQueued, NOTE_MAX_CHARS, NOTES_MAX_CHARS, queueEnabled, requeue, resolveTask, search, setQueueEnabled, slugify, startTask, unqueue } from '../lib/queue.js';
+import { approve, appendNote, bindSession, close, editDraft, enqueue, ensureWorkspace, get, getWorkspaceRules, list, moveQueued, NOTE_MAX_CHARS, NOTES_MAX_CHARS, queueEnabled, requeue, resolveTask, RULES_MAX_CHARS, search, setQueueEnabled, setWorkspaceRules, slugify, startTask, unqueue } from '../lib/queue.js';
 
 function fresh() { const h = openMemory(); const ws = ensureWorkspace(h.db, 'C:/repo'); return { h, ws }; }
 
@@ -658,9 +658,9 @@ describe('requeue (active -> queued)', () => {
 describe('per-project queue pause', () => {
   const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
 
-  it('fresh databases are v6 with the queue enabled', () => {
+  it('fresh databases are v7 with the queue enabled', () => {
     const { h, ws } = fresh();
-    assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+    assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
     assert.equal(h.db.prepare("SELECT queue_enabled AS q FROM workspaces WHERE id = ?").get(ws).q, 1);
     h.close();
   });
@@ -834,7 +834,7 @@ describe('per-workspace numbering', () => {
     h.close();
   });
 
-  it('v2 databases migrate to v6 with deterministic seq backfill, ids untouched', async () => {
+  it('v2 databases migrate to v7 with deterministic seq backfill, ids untouched', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -857,7 +857,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: the v2->v3->v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
         const rows = h.db.prepare("SELECT id, workspace_id, seq, notes FROM tasks ORDER BY id ASC").all();
         assert.deepEqual(rows.map((r) => [r.id, r.workspace_id, r.seq]), [[1, 1, 1], [2, 2, 1], [3, 1, 2]]);
         // v6 backfills the notes log of every pre-existing row with ''.
@@ -877,7 +877,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v1 databases migrate to v6 (column rename + seq backfill + queued_at + notes)', async () => {
+  it('v1 databases migrate to v7 (column rename + seq backfill + queued_at + notes + rules)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -898,7 +898,7 @@ describe('per-workspace numbering', () => {
       raw.close();
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
         const row = get(h.db, 1);
         assert.equal(row.type, 'bug');
         assert.equal(row.title, 'Vecchio');
@@ -915,7 +915,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v3 databases migrate to v6 in place (queued_at added, rows NULL)', async () => {
+  it('v3 databases migrate to v7 in place (queued_at added, rows NULL)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -938,7 +938,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: the v3->v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
         const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
         assert.ok(cols.some((c) => c.name === 'queued_at'), 'queued_at column exists');
         assert.ok(cols.some((c) => c.name === 'notes'), 'notes column exists');
@@ -955,7 +955,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v4 databases migrate to v6 in place (queue_enabled backfilled to 1)', async () => {
+  it('v4 databases migrate to v7 in place (queue_enabled backfilled to 1)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -978,7 +978,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: the v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
         const cols = h.db.prepare("PRAGMA table_info(workspaces)").all();
         assert.ok(cols.some((c) => c.name === 'queue_enabled'), 'queue_enabled column exists');
         // Every pre-existing workspace keeps the automatic behavior.
@@ -997,7 +997,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v5 databases migrate to v6 in place (notes column backfilled with empty logs)', async () => {
+  it('v5 databases migrate to v7 in place (notes column backfilled with empty logs)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -1020,7 +1020,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: only the v5->v6 step runs.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 6);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
         const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
         assert.ok(cols.some((c) => c.name === 'notes'), 'notes column exists');
         // Every pre-existing row reads as "no notes" (NOT NULL DEFAULT '').
@@ -1043,5 +1043,63 @@ describe('per-workspace numbering', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('v6 databases migrate to v7 in place (rules column backfilled empty)', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { DatabaseSync } = await import('node:sqlite');
+    const { openDatabase } = await import('../lib/db.js');
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tasks-v6-'));
+    const path = join(dir, 'tasks.db');
+    try {
+      // Faithful v6 layout: notes present, no rules column.
+      const raw = new DatabaseSync(path);
+      raw.exec("PRAGMA application_id = 2003397999");
+      raw.exec("CREATE TABLE workspaces (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, base_branch TEXT NOT NULL DEFAULT '', queue_enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+      raw.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, slug TEXT NOT NULL, spec TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft', worker_session TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT, close_reason TEXT, queued_at TEXT, notes TEXT NOT NULL DEFAULT '')");
+      raw.exec("CREATE INDEX idx_tasks_ws_state ON tasks(workspace_id, state)");
+      raw.exec("CREATE UNIQUE INDEX idx_tasks_ws_seq ON tasks(workspace_id, seq)");
+      raw.exec("INSERT INTO workspaces (id, path, base_branch, queue_enabled, created_at, updated_at) VALUES (1, 'C:/a', '', 1, 't', 't')");
+      raw.exec("PRAGMA user_version = 6");
+      raw.close();
+      const h = openDatabase({ path });
+      try {
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        const cols = h.db.prepare("PRAGMA table_info(workspaces)").all();
+        assert.ok(cols.some((c) => c.name === 'rules'), 'rules column exists');
+        assert.equal(getWorkspaceRules(h.db, 1), '');
+      } finally {
+        h.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('workspace rules', () => {
+  it('get/set round-trips per workspace; trim + empty clears', () => {
+    const { h } = fresh();
+    const other = ensureWorkspace(h.db, 'C:/other');
+    const ws = ensureWorkspace(h.db, 'C:/repo');
+    assert.equal(getWorkspaceRules(h.db, ws), '');
+    setWorkspaceRules(h.db, ws, 'alla fine del lavoro aggiorna la wiki');
+    assert.equal(getWorkspaceRules(h.db, ws), 'alla fine del lavoro aggiorna la wiki');
+    assert.equal(getWorkspaceRules(h.db, other), '', 'other workspaces read ""');
+    setWorkspaceRules(h.db, ws, '  padded  ');
+    assert.equal(getWorkspaceRules(h.db, ws), 'padded');
+    setWorkspaceRules(h.db, ws, '   ');
+    assert.equal(getWorkspaceRules(h.db, ws), '');
+    h.close();
+  });
+
+  it('rejects non-string + too-long; fail-open on missing row', () => {
+    const { h, ws } = fresh();
+    assert.throws(() => setWorkspaceRules(h.db, ws, 42), /rules must be a string/);
+    assert.throws(() => setWorkspaceRules(h.db, ws, 'x'.repeat(RULES_MAX_CHARS + 1)), /at most/);
+    assert.equal(getWorkspaceRules(h.db, 9999), '');
+    h.close();
   });
 });

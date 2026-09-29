@@ -47,10 +47,12 @@ describe('spawn identified prompt', () => {
     assert.doesNotMatch(text, /#9/);
   });
 
-  it('workerPrompt defaults to branch-automerge + manual finish', () => {
+  it('workerPrompt defaults to branch-automerge + manual finish + English + extended', () => {
     const text = workerPrompt({ id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' });
     assert.match(text, /Git mode for this task is branch-automerge/);
     assert.match(text, /Self-finish is OFF/);
+    assert.match(text, /Commit\/PR language: English\./);
+    assert.match(text, /Message style is extended: commit subject \+ body/);
     assert.match(text, /exactly ONE PR/);
     assert.match(text, /--no-ff/);
     assert.match(text, /any conflict aborts/);
@@ -105,11 +107,11 @@ describe('spawn identified prompt', () => {
   });
 
   it('modesOfCtx reads the git mode, safe on missing/unknown', () => {
-    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' });
-    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' });
+    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerGitMode: 'branch-automerge', commitLanguage: 'English', messageStyle: 'extended', workerModel: '' });
+    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerGitMode: 'branch-automerge', commitLanguage: 'English', messageStyle: 'extended', workerModel: '' });
     assert.deepEqual(
       modesOfCtx(fakeModesCtx({ workerGitMode: 'in-place-local' })),
-      { workerCanFinish: false, workerGitMode: 'in-place-local', workerRules: '', workerModel: '' },
+      { workerCanFinish: false, workerGitMode: 'in-place-local', commitLanguage: 'English', messageStyle: 'extended', workerModel: '' },
     );
     assert.deepEqual(
       modesOfCtx(fakeModesCtx({ workerGitMode: 'x' })).workerGitMode,
@@ -117,16 +119,33 @@ describe('spawn identified prompt', () => {
     );
   });
 
-  it('modesOfCtx reads workerRules verbatim, safe on missing/non-string', () => {
+  it('modesOfCtx reads the commit language, blank/missing/non-string -> English', () => {
     assert.equal(
-      modesOfCtx(fakeModesCtx({ workerRules: 'alla fine del lavoro aggiorna la wiki' })).workerRules,
-      'alla fine del lavoro aggiorna la wiki',
+      modesOfCtx(fakeModesCtx({ commitLanguage: 'Italian' })).commitLanguage,
+      'Italian',
     );
     assert.equal(
-      modesOfCtx(fakeModesCtx({ workerRules: 42 })).workerRules,
-      '',
+      modesOfCtx(fakeModesCtx({ commitLanguage: '  Italiano  ' })).commitLanguage,
+      'Italiano',
     );
-    assert.equal(modesOfCtx(undefined).workerRules, '');
+    assert.equal(modesOfCtx(fakeModesCtx({ commitLanguage: '' })).commitLanguage, 'English');
+    assert.equal(modesOfCtx(fakeModesCtx({ commitLanguage: '   ' })).commitLanguage, 'English');
+    assert.equal(modesOfCtx(fakeModesCtx({ commitLanguage: 42 })).commitLanguage, 'English');
+    assert.equal(modesOfCtx(undefined).commitLanguage, 'English');
+  });
+
+  it('modesOfCtx reads the message style, unknown -> extended', () => {
+    assert.equal(
+      modesOfCtx(fakeModesCtx({ messageStyle: 'minimal' })).messageStyle,
+      'minimal',
+    );
+    assert.equal(
+      modesOfCtx(fakeModesCtx({ messageStyle: 'extended' })).messageStyle,
+      'extended',
+    );
+    assert.equal(modesOfCtx(fakeModesCtx({ messageStyle: 'x' })).messageStyle, 'extended');
+    assert.equal(modesOfCtx(fakeModesCtx({})).messageStyle, 'extended');
+    assert.equal(modesOfCtx(undefined).messageStyle, 'extended');
   });
 
   it('modesOfCtx reads workerModel, safe on missing/non-string', () => {
@@ -198,27 +217,33 @@ describe('spawn identified prompt', () => {
     h.close();
   });
 
-  it('workerPrompt appends user rules verbatim under a labelled section', () => {
-    const text = workerPrompt(
-      { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' },
-      { workerGitMode: 'branch-automerge', workerCanFinish: false, workerRules: 'alla fine del lavoro aggiorna la wiki' },
-    );
-    assert.match(text, /Additional user-defined rules \(follow them, they do not override the queue modes above\):/);
-    assert.match(text, /alla fine del lavoro aggiorna la wiki/);
-    // Section order: AFTER the mode lines, BEFORE the startup liturgy.
-    const rulesAt = text.indexOf('Additional user-defined rules');
-    assert.ok(rulesAt > text.indexOf('Self-finish is OFF'));
-    assert.ok(rulesAt < text.indexOf('startup liturgy'));
+  it('workerPrompt carries the language + style lines, no hardcoded ALWAYS English', () => {
+    const task = { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' };
+    const text = workerPrompt(task, { workerGitMode: 'branch-automerge', workerCanFinish: false, commitLanguage: 'Italian', messageStyle: 'minimal' });
+    assert.match(text, /Commit\/PR language: Italian\./);
+    assert.match(text, /Message style is minimal: one-line commits/);
+    assert.match(text, /PR title \+ max 2-line body, no sections/);
+    assert.doesNotMatch(text, /ALWAYS English/);
+    assert.doesNotMatch(text, /in English/);
+    const extended = workerPrompt(task, { workerGitMode: 'branch-automerge', workerCanFinish: false });
+    assert.match(extended, /Commit\/PR language: English\./);
+    assert.match(extended, /Message style is extended: commit subject \+ body/);
+    assert.match(extended, /PR with What\/Verified\/Notes sections/);
   });
 
-  it('workerPrompt has no rules section when empty/undefined', () => {
+  it('workerPrompt in-place commit convention follows the spawn language', () => {
+    const text = workerPrompt(
+      { id: 12, seq: 12, title: 'Fix login', branch: 'task/12-fix-login', slug: 'fix-login' },
+      { workerGitMode: 'in-place-local', workerCanFinish: false, commitLanguage: 'Italian' },
+    );
+    assert.match(text, /Commit\/PR language: Italian\./);
+    assert.match(text, /in Italian \+ ` \(task #12\)` suffix/);
+    assert.doesNotMatch(text, /in English/);
+  });
+
+  it('workerPrompt unknown style reads as extended', () => {
     const task = { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' };
-    const without = workerPrompt(task);
-    const empty = workerPrompt(task, { workerGitMode: 'branch-automerge', workerCanFinish: false, workerRules: '' });
-    const blank = workerPrompt(task, { workerGitMode: 'branch-automerge', workerCanFinish: false, workerRules: '   ' });
-    assert.equal(empty, without);
-    assert.equal(blank, without);
-    assert.doesNotMatch(without, /Additional user-defined rules/);
+    assert.match(workerPrompt(task, { messageStyle: 'x' }), /Message style is extended/);
   });
 
   it('spawnWorker tells the worker its modes in the first prompt', async () => {
@@ -247,10 +272,41 @@ describe('spawn identified prompt', () => {
     const text = captured.followup.content.map((b) => b.text).join('\n');
     assert.match(text, /Git mode for this task is in-place-push/);
     assert.match(text, /Self-finish is OFF/);
+    assert.match(text, /Commit\/PR language: English\./);
+    assert.match(text, /Message style is extended/);
     h.close();
   });
 
-  it('spawnWorker first message contains the user rules verbatim', async () => {
+  it('spawnWorker first message contains language + style lines', async () => {
+    const h = openMemory();
+    const ws = ensureWorkspace(h.db, 'C:/repo-a');
+    const row = enqueue(h.db, ws, { type: 'bug', title: 'Modes', spec: '' });
+    h.db.prepare('UPDATE tasks SET state = ? WHERE id = ?').run('active', row.id);
+    const captured = {};
+    const ctx = {
+      get(key) {
+        if (key === 'agents') {
+          return {
+            create: async ({ sessionId }) => ({
+              agent: {
+                session: { id: sessionId },
+                followup: (msg) => { captured.followup = msg; },
+              },
+            }),
+          };
+        }
+        if (key === 'settings') return fakeSettings({ commitLanguage: 'Italian', messageStyle: 'minimal' });
+        return undefined;
+      },
+    };
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task: get(h.db, row.id) });
+    const text = captured.followup.content.map((b) => b.text).join('\n');
+    assert.match(text, /Commit\/PR language: Italian\./);
+    assert.match(text, /Message style is minimal/);
+    h.close();
+  });
+
+  it('spawnWorker first message contains the workspace rules verbatim', async () => {
     const h = openMemory();
     const ws = ensureWorkspace(h.db, 'C:/repo-a');
     const row = enqueue(h.db, ws, { type: 'bug', title: 'Rules', spec: '' });
@@ -268,13 +324,15 @@ describe('spawn identified prompt', () => {
             }),
           };
         }
-        if (key === 'settings') return fakeSettings({ workerRules: 'alla fine del lavoro aggiorna la wiki' });
+        if (key === 'settings') return fakeSettings({ commitLanguage: 'English', messageStyle: 'extended' });
         return undefined;
       },
     };
+    const { setWorkspaceRules } = await import('../lib/queue.js');
+    setWorkspaceRules(h.db, ws, 'alla fine del lavoro aggiorna la wiki');
     await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task: get(h.db, row.id) });
     const text = captured.followup.content.map((b) => b.text).join('\n');
-    assert.match(text, /Additional user-defined rules/);
+    assert.match(text, /Project rules for this workspace/);
     assert.match(text, /alla fine del lavoro aggiorna la wiki/);
     h.close();
   });
