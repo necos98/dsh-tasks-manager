@@ -16,7 +16,7 @@ Il tool fa una cosa sola, deterministica: **gestisce la coda** (draft/queued/act
 Il tool NON fa, per scelta:
 
 - Niente worktree: il worker lavora nel checkout dell'utente.
-- Niente merge dal worker o dal plugin, niente rilevamento merge, niente stati di PR: chiusura manuale via UI. Il worker apre UNA PR branch -> base via `gh` e ne riporta l'URL; il merge resta umano e fuori dal plugin.
+- Niente merge dal worker o dal plugin di default, niente rilevamento merge, niente stati di PR: chiusura manuale via UI. In modalità branch-automerge il worker apre UNA PR branch -> base via `gh`, la mergia con --no-ff e ne riporta lo SHA; in modalità in-place non apre mai PR né mergia. Il merge umano fuori dal plugin resta disponibile in ogni modalità.
 - Niente controlli git: tree pulito, branch libero, fetch, rebase, push sono disciplina del system prompt, non regole del tool.
 - Niente test enforcement, niente contatore tentativi, niente log conservati: se i test falliscono, è l'umano a capirlo e chiudere come vuole.
 - Niente scheduler, slot, priorità: solo FIFO banale (il queued più vecchio avanza).
@@ -68,13 +68,13 @@ Il tool non lo scrive, non lo cambia, non gli importa se l'agente ha finito o no
 
 ## 7. Liturgia worker (system prompt, NON tool)
 
-All'avvio, nel checkout utente: fetch di `origin/<base>`; `checkout -b task/<id>-<slug> origin/<base>`; lavora con commit checkpoint liberi; lancia la suite se esiste (se non esiste, dillo e basta, senza inventare test); `push -u origin` del suo branch; apre UNA PR branch -> base via `gh pr create` e ne riporta l'URL ("pronto: <URL>"). Poi tace.
+All'avvio, la disciplina git segue la modalità detta dallo spawn ("Git mode for this task is <mode>"): in branch-automerge, nel checkout utente: fetch di `origin/<base>`; `checkout -b task/<id>-<slug> origin/<base>`; lavora con commit checkpoint liberi; lancia la suite se esiste (se non esiste, dillo e basta, senza inventare test); `push -u origin` del suo branch; apre UNA PR branch -> base via `gh pr create`, la mergia con --no-ff dopo rebase + suite verde e ne riporta lo SHA ("merged: <SHA>"). In in-place-local/in-place-push resta sul branch corrente (mai nuovo branch, mai PR, mai merge; push solo in push, unico e finale): prima `git status --porcelain` (se sporco STOP + domanda), poi commit logici con suffisso ` (task #N)`.
 
 - Branch suo: `push --force-with-lease` ammesso dopo rebase. Mai touch al base: niente checkout del base dopo avvio, niente merge, niente push sul base.
 - Base avanzato mentre lavora: rebase + re-test + force-with-lease; se fallisce → lo dice in chat (→ `need_attention`), il tool non fa niente.
 - Tree sporco, branch occupato, push rifiutato, base non rilevabile: non sono errori del tool, sono cose che il worker riporta in chat e l'umano gestisce.
 
-Base branch: rilevato da `origin/HEAD` + override settings. Repo senza origin GitHub: il worker lo dice in chat, l'umano chiude il task.
+Base branch: rilevato da `origin/HEAD` + override settings (vale solo per branch-automerge; le modalità in-place lo ignorano). Repo senza origin GitHub: il worker lo dice in chat, l'umano chiude il task.
 
 ## 8. Chiusura
 
@@ -113,8 +113,8 @@ Backend autoritativo sulla sola coda, fiducia nel worker per tutto il resto (qua
 
 ## 14. Esempio end-to-end
 
-1. Chat: il login scazza su mobile → triage bug, 3 domande → draft. 2. Approvi → queued → active quando lo slot è libero → worker chat in background. 3. Worker: branch task/12-login-mobile, fix, test verdi, push, apre la PR via `gh` e riporta "pronto: <URL PR>". 4. Togli quel log → pusha di nuovo (la stessa PR si aggiorna da sola). 5. Mergi su GitHub come sempre. Chiudi task (done) → la coda avanza.
+1. Chat: il login scazza su mobile → triage bug, 3 domande → draft. 2. Approvi → queued → active quando lo slot è libero → worker chat in background. 3. Worker (branch-automerge): branch task/12-login-mobile, fix, test verdi, push, apre la PR via `gh`, la mergia con --no-ff e riporta "merged: <SHA>". 4. Togli quel log → pusha di nuovo (la stessa PR si aggiorna da sola, o commit in place nelle altre modalità). 5. Mergi su GitHub come sempre (branch-automerge lo fa il worker). Chiudi task (done) → la coda avanza.
 
 ## 15. Registro decisioni
 
-1. Versione stupida sincrona: un attivo per repo, niente worktree/scheduler/PR dal plugin (2026-09-07). 2. Triage divieto tecnico, lettura sì. approve/close solo utente. 3. Tool = sola coda deterministica: approve → sempre queued, promozione FIFO automatica; niente controlli git/test nel tool (2026-09-07). 4. Terminali done/cancelled/failed equivalenti per il tool, scelta umana. 5. Niente contatore tentativi nel tool. 6. working/need_attention derivati da DSH, non gestiti dal tool; ask_user_question nativo. 7. Worker nel checkout: branch suo, mai touch al base, force-with-lease solo sul suo; apre UNA PR via `gh` e ne riporta l'URL, mai merge proprio, mai seconda PR per le review (push sullo stesso branch). 8. Chiusura manuale; branch mai cancellati alla chiusura. 9. Draft eterni; niente auto-avvio. 10. GitHub-only; base da origin/HEAD + override; sqlite WAL. 11. design-task-queue.md = visione v2 rimandata.
+1. Versione stupida sincrona: un attivo per repo, niente worktree/scheduler dal plugin (2026-09-07). PR/merge solo in modalità branch-automerge; le modalità in-place lavorano sul branch corrente senza PR né merge. 2. Triage divieto tecnico, lettura sì. approve/close solo utente. 3. Tool = sola coda deterministica: approve → sempre queued, promozione FIFO automatica; niente controlli git/test nel tool (2026-09-07). 4. Terminali done/cancelled/failed equivalenti per il tool, scelta umana. 5. Niente contatore tentativi nel tool. 6. working/need_attention derivati da DSH, non gestiti dal tool; ask_user_question nativo. 7. Worker nel checkout: in branch-automerge branch suo, mai touch al base fuori dalla sequenza auto-merge, force-with-lease solo sul suo; apre UNA PR via `gh` e la mergia con --no-ff, mai seconda PR per le review (push sullo stesso branch); in in-place commit raggruppati sul corrente con suffisso ` (task #N)`, push solo in push. 8. Chiusura manuale; branch mai cancellati alla chiusura. 9. Draft eterni; niente auto-avvio. 10. GitHub-only per PR/merge; base da origin/HEAD + override; sqlite WAL. 11. design-task-queue.md = visione v2 rimandata.

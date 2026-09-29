@@ -40,15 +40,24 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   "Worker closes its own task"), or directly in `~/.dsh/settings.yaml`
   under `tasks:`. The Tasks panel header shows the live mode; flipping
   the setting mounts/unmounts the tool live.
-- Auto-merge (`tasks.workerCanMerge` setting, default `false`): same card,
-  switch "Worker merges into base (--no-ff)". When `true`, the worker
-  merges its own branch into the base with `git merge --no-ff` (message
-  `Merge task #<seq>: <title>`, one task = one merge commit) BEFORE
-  closing, after rebase + green suite + fast-forward base check. At ANY
-  conflict it aborts (`git merge --abort`), leaves the tree untouched,
-  reports the conflicting files, and waits: the task stays open, no
-  --theirs/--ours, no hand resolutions, no force on base. When `false`
-  the human merges outside and the worker never touches base.
+- Git mode (`tasks.workerGitMode` setting, default `"branch-automerge"`):
+  Settings → Tasks → "Git workflow" offers three modes. `branch-automerge`
+  is the full workflow: the worker branches `task/<seq>-<slug>` from the
+  base, pushes, opens exactly one PR branch -> base and merges it with
+  `git merge --no-ff` (message `Merge task #<seq>: <title>`, one task = one
+  merge commit) BEFORE closing, after rebase + green suite + fast-forward
+  base check. At ANY conflict it aborts (`git merge --abort`), leaves the
+  tree untouched, reports the conflicting files, and waits: the task stays
+  open, no --theirs/--ours, no hand resolutions, no force on base.
+  `in-place-local` keeps the worker on the CURRENT branch (no new branch,
+  no PR, no merge, no push): it stops on a dirty tree (`git status
+  --porcelain` non-empty → list file names, ask via `ask_user_question`,
+  wait) and groups changes into logical `git commit` commits with a
+  ` (task #<seq>)` message suffix. `in-place-push` is the same plus one
+  plain trailing `git push` of the current branch after a green suite (push
+  rejected → stop, report, wait). The spawn message tells the worker its
+  mode (`Git mode for this task is <mode>`); the worker preset follows only
+  the named section. `baseBranch` applies to branch-automerge only.
 - Manual GitHub updater (Settings → Tasks → "Updates"): **Check for
   updates** reads the RELEASE TAGS of `github.com/necos98/dsh-tasks-manager`
   and compares them with the version installed in the profile;
@@ -117,12 +126,12 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 
 ## Config
 
-`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`, locates the queue database), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerCanMerge` (default false), `workerRules` (default `""`), `workerModel` (default `""`).
+`enabled` (default false), `order` (default 50 — see note below), `allowCommand` (default true), `section` (default English policy text), `baseBranch` (default `""` = auto from origin/HEAD), `dshHome` (default `""` = `resolveDshHome()`, locates the queue database), `updateRepository` (default `necos98/dsh-tasks-manager`), `updateProfile` (default `""` = derive from the profile directory), `updateIncludePrerelease` (default false), `updateTimeoutMs` (default 180000, for both the tag lookup and the package-manager run), `updateProfileDir` (default `""` = locate the profile by walking up to the nearest `package.json` declaring `dsh.profile`), `updateToken` (default `""`, used only by the GitHub API fallback when `git ls-remote` is unavailable; `GITHUB_TOKEN`/`GH_TOKEN` are read as well), `workerCanFinish` (default false), `workerGitMode` (default `"branch-automerge"`), `workerRules` (default `""`), `workerModel` (default `""`).
 
 ### The settings namespace
 
 Since **DSH 0.1.7-rc.2** the five per-user fields above — `baseBranch`,
-`workerCanFinish`, `workerCanMerge`, `workerRules`, `workerModel` — are the
+`workerCanFinish`, `workerGitMode`, `workerRules`, `workerModel` — are the
 **volatile** fields of this plugin's exported `Config` schema, and that is what
 the harness turns into the entry's settings namespace:
 
@@ -179,8 +188,8 @@ plugin in the profile and restart `dsh web` to load them.
 This release requires **DSH ≥ 0.1.7-rc.2**. Older builds registered a settings
 namespace named `tasks`; the harness now derives it from the entry id, so it is
 **`dsh-tasks-manager`**. There is no migration map for the old key: preferences
-saved by an earlier version under `tasks` (finish/merge toggles, `baseBranch`,
-`workerRules`, `workerModel`) are **not** migrated and fall back to the
+saved by an earlier version under `tasks` (finish toggle, git mode,
+`baseBranch`, `workerRules`, `workerModel`) are **not** migrated and fall back to the
 `cordis.patch.yml` defaults. Re-enter them in Settings → Tasks; they persist
 from then on. A hand-written `tasks:` block in `~/.dsh/settings.yaml` is
 ignored for the same reason. Nothing else about the install changes — the

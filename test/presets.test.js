@@ -113,23 +113,29 @@ describe('preset declarations (bundle patches)', () => {
     assert.equal(existsSync(join(root, 'lib', 'presets-sync.js')), false, 'presets-sync.js');
     assert.equal(CONFIG_KEYS.includes('syncPresets'), false, 'syncPresets config key');
     // The live settings namespace is untouched by the migration.
-    assert.deepEqual([...SETTINGS_KEYS].sort(), ['baseBranch', 'workerCanFinish', 'workerCanMerge', 'workerModel', 'workerRules']);
+    assert.deepEqual([...SETTINGS_KEYS].sort(), ['baseBranch', 'workerCanFinish', 'workerGitMode', 'workerModel', 'workerRules']);
   });
 
-  it('worker preset pins the auto-merge liturgy (--no-ff, abort on conflict)', () => {
-    // Content pin: future preset edits must not silently drop the merge
-    // rule or the conflict discipline. Reads the SHIPPED declaration.
+  it('worker preset gates the 3 git modes on the spawn message (--no-ff, abort on conflict)', () => {
+    // Content pin: future preset edits must not silently drop a mode section
+    // or the merge/conflict discipline. Reads the SHIPPED declaration.
     const text = shipped('presets/taskqueue-worker.patch.yml');
+    assert.match(text, /## Branch-automerge mode \(ONLY when spawn says git mode is branch-automerge\)/);
+    assert.match(text, /## In-place-local mode \(ONLY when spawn says git mode is in-place-local\)/);
+    assert.match(text, /## In-place-push mode \(ONLY when spawn says git mode is in-place-push\)/);
+    assert.match(text, /Git mode for this task is <mode>/);
     assert.match(text, /## Auto-merge/);
     assert.match(text, /git merge --no-ff <branch>/);
     assert.match(text, /git merge --abort/);
     assert.match(text, /FORBIDDEN to unblock yourself/);
     assert.match(text, /--theirs\/--ours/);
     assert.match(text, /The task stays open/);
-    // The default-off rule survives alongside: manual mode never touches base.
-    assert.match(text, /when auto-merge is OFF/);
-    assert.match(text, /merged: <SHA>/);
+    assert.match(text, /git status --porcelain/);
+    assert.match(text, /\(task #<seq>\)/);
+    // In-place modes never touch another branch, the base, a PR or a merge.
+    assert.match(text, /NEVER open a PR, NEVER merge, NEVER push/);
+    assert.match(text, /task\.branch is history\s+only/);
     // The spawn message (not memory) is authoritative for the modes.
-    assert.match(text, /that line\s+is authoritative, NOT your memory/);
+    assert.match(text, /that line\s+is authoritative,\s+NOT your memory/);
   });
 });

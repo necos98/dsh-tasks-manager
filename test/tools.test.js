@@ -535,14 +535,16 @@ describe('tool execute (structured values + render)', () => {
   });
 
   it('finish gate unit: mounts/unmounts on sync', async () => {
-    const { createFinishGate, workerCanFinishOf, workerCanMergeOf, workerRulesOf } = await import('../lib/finish-toggle.js');
+    const { createFinishGate, workerCanFinishOf, workerGitModeOf, workerRulesOf } = await import('../lib/finish-toggle.js');
     assert.equal(workerCanFinishOf(undefined), false);
     assert.equal(workerCanFinishOf({}), false);
     assert.equal(workerCanFinishOf({ workerCanFinish: true }), true);
-    assert.equal(workerCanMergeOf(undefined), false);
-    assert.equal(workerCanMergeOf({}), false);
-    assert.equal(workerCanMergeOf({ workerCanMerge: true }), true);
-    assert.equal(workerCanMergeOf({ workerCanMerge: 'yes' }), false);
+    assert.equal(workerGitModeOf(undefined), 'branch-automerge');
+    assert.equal(workerGitModeOf({}), 'branch-automerge');
+    assert.equal(workerGitModeOf({ workerGitMode: 'in-place-local' }), 'in-place-local');
+    assert.equal(workerGitModeOf({ workerGitMode: 'in-place-push' }), 'in-place-push');
+    assert.equal(workerGitModeOf({ workerGitMode: 'x' }), 'branch-automerge');
+    assert.equal(workerGitModeOf({ workerGitMode: true }), 'branch-automerge');
     assert.equal(workerRulesOf(undefined), '');
     assert.equal(workerRulesOf({}), '');
     assert.equal(workerRulesOf({ workerRules: 42 }), '');

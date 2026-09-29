@@ -47,30 +47,73 @@ describe('spawn identified prompt', () => {
     assert.doesNotMatch(text, /#9/);
   });
 
-  it('workerPrompt defaults to manual modes (never touch base)', () => {
+  it('workerPrompt defaults to branch-automerge + manual finish', () => {
     const text = workerPrompt({ id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' });
-    assert.match(text, /auto-merge is OFF/);
-    assert.match(text, /self-finish is OFF/);
-    assert.match(text, /NEVER touch the base branch/);
-  });
-
-  it('workerPrompt states ON modes explicitly when enabled', () => {
-    const text = workerPrompt(
-      { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' },
-      { workerCanMerge: true, workerCanFinish: true },
-    );
-    assert.match(text, /auto-merge is ON/);
-    assert.match(text, /self-finish is ON/);
+    assert.match(text, /Git mode for this task is branch-automerge/);
+    assert.match(text, /Self-finish is OFF/);
+    assert.match(text, /exactly ONE PR/);
     assert.match(text, /--no-ff/);
     assert.match(text, /any conflict aborts/);
   });
 
-  it('modesOfCtx reads the toggles, safe on missing pieces', () => {
-    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
-    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerCanMerge: false, workerRules: '', workerModel: '' });
+  it('workerPrompt branch-automerge instructs PR + mandatory --no-ff merge', () => {
+    const text = workerPrompt(
+      { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' },
+      { workerGitMode: 'branch-automerge', workerCanFinish: true },
+    );
+    assert.match(text, /Git mode for this task is branch-automerge/);
+    assert.match(text, /Self-finish is ON/);
+    assert.match(text, /--no-ff/);
+    assert.match(text, /any conflict aborts/);
+    assert.match(text, /task\/7-fix-login/);
+  });
+
+  it('workerPrompt in-place-local never mentions push/PR/merge, mandates the dirty-tree stop + grouped commits', () => {
+    const text = workerPrompt(
+      { id: 12, seq: 12, title: 'Fix login', branch: 'task/12-fix-login', slug: 'fix-login' },
+      { workerGitMode: 'in-place-local', workerCanFinish: false },
+    );
+    assert.match(text, /Git mode for this task is in-place-local/);
+    assert.match(text, /Stay on the CURRENT branch/);
+    assert.match(text, /NEVER open a PR, NEVER merge, NEVER push/);
+    assert.match(text, /git status --porcelain/);
+    assert.match(text, /ask via ask_user_question and wait/);
+    assert.match(text, /\(task #12\)/);
+    assert.doesNotMatch(text, /gh pr create/);
+    assert.doesNotMatch(text, /--no-ff/);
+    assert.doesNotMatch(text, /git push/);
+  });
+
+  it('workerPrompt in-place-push adds a single trailing push', () => {
+    const text = workerPrompt(
+      { id: 12, seq: 12, title: 'Fix login', branch: 'task/12-fix-login', slug: 'fix-login' },
+      { workerGitMode: 'in-place-push', workerCanFinish: false },
+    );
+    assert.match(text, /Git mode for this task is in-place-push/);
+    assert.match(text, /Stay on the CURRENT branch/);
+    assert.match(text, /one plain `git push` of the current branch/);
+    assert.match(text, /Never push before the suite is green/);
+    assert.match(text, /\(task #12\)/);
+    assert.doesNotMatch(text, /gh pr create/);
+    assert.doesNotMatch(text, /--no-ff/);
+  });
+
+  it('workerPrompt falls back to branch-automerge on unknown modes', () => {
+    const task = { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' };
+    assert.match(workerPrompt(task, { workerGitMode: 'x' }), /Git mode for this task is branch-automerge/);
+    assert.match(workerPrompt(task, {}), /Git mode for this task is branch-automerge/);
+  });
+
+  it('modesOfCtx reads the git mode, safe on missing/unknown', () => {
+    assert.deepEqual(modesOfCtx(undefined), { workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' });
+    assert.deepEqual(modesOfCtx({ get: () => undefined }), { workerCanFinish: false, workerGitMode: 'branch-automerge', workerRules: '', workerModel: '' });
     assert.deepEqual(
-      modesOfCtx(fakeModesCtx({ workerCanMerge: true })),
-      { workerCanFinish: false, workerCanMerge: true, workerRules: '', workerModel: '' },
+      modesOfCtx(fakeModesCtx({ workerGitMode: 'in-place-local' })),
+      { workerCanFinish: false, workerGitMode: 'in-place-local', workerRules: '', workerModel: '' },
+    );
+    assert.deepEqual(
+      modesOfCtx(fakeModesCtx({ workerGitMode: 'x' })).workerGitMode,
+      'branch-automerge',
     );
   });
 
@@ -158,21 +201,21 @@ describe('spawn identified prompt', () => {
   it('workerPrompt appends user rules verbatim under a labelled section', () => {
     const text = workerPrompt(
       { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' },
-      { workerCanMerge: false, workerCanFinish: false, workerRules: 'alla fine del lavoro aggiorna la wiki' },
+      { workerGitMode: 'branch-automerge', workerCanFinish: false, workerRules: 'alla fine del lavoro aggiorna la wiki' },
     );
     assert.match(text, /Additional user-defined rules \(follow them, they do not override the queue modes above\):/);
     assert.match(text, /alla fine del lavoro aggiorna la wiki/);
     // Section order: AFTER the mode lines, BEFORE the startup liturgy.
     const rulesAt = text.indexOf('Additional user-defined rules');
-    assert.ok(rulesAt > text.indexOf('self-finish is OFF'));
+    assert.ok(rulesAt > text.indexOf('Self-finish is OFF'));
     assert.ok(rulesAt < text.indexOf('startup liturgy'));
   });
 
   it('workerPrompt has no rules section when empty/undefined', () => {
     const task = { id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' };
     const without = workerPrompt(task);
-    const empty = workerPrompt(task, { workerCanMerge: false, workerCanFinish: false, workerRules: '' });
-    const blank = workerPrompt(task, { workerCanMerge: false, workerCanFinish: false, workerRules: '   ' });
+    const empty = workerPrompt(task, { workerGitMode: 'branch-automerge', workerCanFinish: false, workerRules: '' });
+    const blank = workerPrompt(task, { workerGitMode: 'branch-automerge', workerCanFinish: false, workerRules: '   ' });
     assert.equal(empty, without);
     assert.equal(blank, without);
     assert.doesNotMatch(without, /Additional user-defined rules/);
@@ -196,14 +239,14 @@ describe('spawn identified prompt', () => {
             }),
           };
         }
-        if (key === 'settings') return fakeSettings({ workerCanMerge: true, workerCanFinish: false });
+        if (key === 'settings') return fakeSettings({ workerGitMode: 'in-place-push', workerCanFinish: false });
         return undefined;
       },
     };
     await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task: get(h.db, row.id) });
     const text = captured.followup.content.map((b) => b.text).join('\n');
-    assert.match(text, /auto-merge is ON/);
-    assert.match(text, /self-finish is OFF/);
+    assert.match(text, /Git mode for this task is in-place-push/);
+    assert.match(text, /Self-finish is OFF/);
     h.close();
   });
 
