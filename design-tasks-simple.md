@@ -1,13 +1,13 @@
 # Tasks semplici (sincroni) -- design.md
 
-> Stato: revisionato 2026-09-07, pronto per implementazione. Nessun codice scritto.
+> Stato: aggiornato post-#27/#28 — le modalità git (branch-automerge, in-place-local, in-place-push) e le project rules per-workspace sono implementate. Questo doc resta la visione di riferimento; lo spawn message e il preset worker sono autorevoli sul comportamento.
 > Lingua: italiano. GitHub-only in v1. Il doc gemello design-task-queue.md resta come visione v2 (parallela, rimandata).
 
 ## 1. Visione in una frase
 
 **Un task = una chat worker che lavora nel tuo repo e committa. Il plugin fa una cosa sola: gestisce una coda stupida. Tutto il resto è nel system prompt.**
 
-L'intake produce draft, l'utente approva o scarta, la coda promuove un task alla volta in active, il worker esegue sul branch nel tuo checkout, tu fai review e mergi come hai sempre fatto. Il plugin dà struttura (coda, storico) non orchestrazione.
+L'intake produce draft, l'utente approva o scarta, la coda promuove un task alla volta in active, il worker esegue nel tuo checkout secondo la git mode detta dallo spawn (branch-automerge: apre UNA PR e la mergia con --no-ff; in-place: commit sul branch corrente, mai PR né merge). Il plugin dà struttura (coda, storico) non orchestrazione.
 
 ## 2. Cosa il tool fa e NON fa
 
@@ -70,7 +70,7 @@ Il tool non lo scrive, non lo cambia, non gli importa se l'agente ha finito o no
 
 All'avvio, la disciplina git segue la modalità detta dallo spawn ("Git mode for this task is <mode>"): in branch-automerge, nel checkout utente: fetch di `origin/<base>`; `checkout -b task/<id>-<slug> origin/<base>`; lavora con commit checkpoint liberi; lancia la suite se esiste (se non esiste, dillo e basta, senza inventare test); `push -u origin` del suo branch; apre UNA PR branch -> base via `gh pr create`, la mergia con --no-ff dopo rebase + suite verde e ne riporta lo SHA ("merged: <SHA>"). In in-place-local/in-place-push resta sul branch corrente (mai nuovo branch, mai PR, mai merge; push solo in push, unico e finale): prima `git status --porcelain` (se sporco STOP + domanda), poi commit logici con suffisso ` (task #N)`.
 
-- Branch suo: `push --force-with-lease` ammesso dopo rebase. Mai touch al base: niente checkout del base dopo avvio, niente merge, niente push sul base.
+- Branch suo (branch-automerge): `push --force-with-lease` ammesso dopo rebase sul SUO branch. Contatto col base SOLO via sequenza ## Auto-merge (--no-ff + un push). In-place modes: MAI touch al base o ad altri branch — niente checkout/merge/push del base (in-place-local non pusha affatto).
 - Base avanzato mentre lavora: rebase + re-test + force-with-lease; se fallisce → lo dice in chat (→ `need_attention`), il tool non fa niente.
 - Tree sporco, branch occupato, push rifiutato, base non rilevabile: non sono errori del tool, sono cose che il worker riporta in chat e l'umano gestisce.
 
@@ -78,7 +78,7 @@ Base branch: rilevato da `origin/HEAD` + override settings (vale solo per branch
 
 ## 8. Chiusura
 
-**Chiusura (`queued/active → done|cancelled|failed`, oppure `draft → cancelled`):** solo utente, bottone nella card o comando chat (`close_task` con esito). Effetto: timestamp di chiusura + avanzamento coda + notifica. Branch locale/remoto restano come sono: nessuna cancellazione automatica, nessuna `gh pr close`. Mergi e pulisci fuori dal plugin, come hai sempre fatto. `done` = "non mi serve più vederlo", non "verificato mergato": il tool non controlla il merge.
+**Chiusura (`queued/active → done|cancelled|failed`, oppure `draft → cancelled`):** solo utente, bottone nella card o comando chat (`close_task` con esito). Effetto: timestamp di chiusura + avanzamento coda + notifica. Branch locale/remoto restano come sono: nessuna cancellazione automatica, nessuna `gh pr close`. In branch-automerge il merge sul base lo fa il worker con --no-ff; nelle modalità in-place mergi e pulisci fuori dal plugin come sempre. `done` = "non mi serve più vederlo", non "verificato mergato": il tool non controlla il merge.
 
 ## 9. Cosa vuol dire test verdi
 
@@ -105,7 +105,7 @@ Backend autoritativo sulla sola coda, fiducia nel worker per tutto il resto (qua
 
 ## 12. Plugin: tre pezzi + skill
 
-1. Host service `taskQueue`: sqlite, coda FIFO per repo, binding sessioni (lazy: la prima `get_my_task` del worker lega la sessione; nessun claim tool, nessun bind all'approvazione). 2. Preset `taskqueue-intake` (triage, senza tool di scrittura file) e `taskqueue-worker` (full dev nel checkout), in `presets/` di questo repo (sottoinsiemi di standard; i tool taskqueue arrivano dagli entry scoped `dsh-tasks-manager/intake-tools` e `.../worker-tools`; approve/close non sono montati in nessun preset). Nota: `dsh-tool-fs` registra read/write/edit in blocco, quindi l'intake omette sia `dsh-tool-fs` che `str_replace_editor`; il divieto di scrittura file è assenza fisica dei tool + approval policy (la shell one-shot per git log resta tecnicamente capace di scrivere: limite dichiarato, non fisico). Aggiornamento: la lettura non dipende più dalla sola shell — l'entry scoped `dsh-tasks-manager/read-tool` registra il solo tool `read` su `ctx.fs`, quindi l'intake legge i file come l'agente standard senza ricevere write/edit. Le regole progetto sono per-workspace (`workspaces.rules`, pannello Tasks → "Project rules"), non un'impostazione globale: lo spawn le allega al primo messaggio del worker. 3. Pannello Tasks per workspace: lista (coda, interno derivato, branch), card con Approva/Scarta per i draft e Chiudi (done/cancelled/failed) per queued/active, settings base_branch. Niente PR, checks, merge. 4. Skill intake a 4, router nel prompt. Notifiche (pannello + chat giusta): queued→active, need_attention, chiuso.
+1. Host service `taskQueue`: sqlite, coda FIFO per repo, binding sessioni (lazy: la prima `get_my_task` del worker lega la sessione; nessun claim tool, nessun bind all'approvazione). 2. Preset `taskqueue-intake` (triage, senza tool di scrittura file) e `taskqueue-worker` (full dev nel checkout), in `presets/` di questo repo (sottoinsiemi di standard; i tool taskqueue arrivano dagli entry scoped `dsh-tasks-manager/intake-tools` e `.../worker-tools`; approve/close non sono montati in nessun preset). Nota: `dsh-tool-fs` registra read/write/edit in blocco, quindi l'intake omette sia `dsh-tool-fs` che `str_replace_editor`; il divieto di scrittura file è assenza fisica dei tool + approval policy (la shell one-shot per git log resta tecnicamente capace di scrivere: limite dichiarato, non fisico). Aggiornamento: la lettura non dipende più dalla sola shell — l'entry scoped `dsh-tasks-manager/read-tool` registra il solo tool `read` su `ctx.fs`, quindi l'intake legge i file come l'agente standard senza ricevere write/edit. Le regole progetto sono per-workspace (`workspaces.rules`, pannello Tasks → "Project rules"), non un'impostazione globale: lo spawn le allega al primo messaggio del worker. 3. Pannello Tasks per workspace: lista (coda, interno derivato, branch), card con Approva/Scarta per i draft e Chiudi (done/cancelled/failed) per queued/active, settings base_branch (solo branch-automerge), regole progetto per-workspace, lingua e stile dei messaggi. Niente checks dal plugin; PR/merge solo in branch-automerge via worker. 4. Skill intake a 4, router nel prompt. Notifiche (pannello + chat giusta): queued→active, need_attention, chiuso.
 
 ## 13. Casi limite
 
