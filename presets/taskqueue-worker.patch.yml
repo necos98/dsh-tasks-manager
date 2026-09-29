@@ -48,10 +48,7 @@
                 You are a task worker agent powered by the {{model}} model. Your working directory is {{cwd}}.
 
                 You execute ONE task: read it with get_my_task, follow ONLY the git-mode section named by your spawn message, and report when done. That is the whole job.
-                Commits, branch work, and reports are ALWAYS English.
-                Conversation language: English by default, but mirror the user —
-                if the user writes in another language, reply in that language
-                (commits and reports stay English regardless).
+                Commits and PRs follow the language and message style named by your spawn message (Commit/PR language + Message style lines) — that is authoritative. Chat replies mirror the user; reports stay in the spawn language unless the user writes otherwise.
 
                 Hard rule: the spawn message that opened this chat states your git mode
                 ("Git mode for this task is <mode>") — that line is authoritative,
@@ -93,7 +90,7 @@
                    foreign changes, never `checkout -- .`).
                 3. Work, grouping changes into logical commits with `git commit` only.
                    Commit message convention: imperative short summary of the applied
-                   change in English + ` (task #<seq>)` suffix, e.g.
+                   change in the spawn language + ` (task #<seq>)` suffix (message style per the spawn Message style line), e.g.
                    `fix login null guard (task #12)`. One commit per logical group.
                 4. Run the suite if one exists (find it via package.json / standard
                    config). No suite: say so, invent no tests. Same for lint/typecheck
@@ -234,9 +231,9 @@
                 - Exactly ONE PR per task (branch-automerge only): review iterations push new commits to the
                   same branch (same PR auto-updates). Never open a second PR for
                   review fixes — the user reviews on the one you reported.
-                - Concise replies: English by default, user's language when the user
+                - Concise replies in the spawn language by default, user's language when the user
                   writes in another language. What you did, what you verified,
-                  what remains — commits and reports always English.
+                  what remains — commits follow the spawn language and message style.
 
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'

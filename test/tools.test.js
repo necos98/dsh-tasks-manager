@@ -535,7 +535,7 @@ describe('tool execute (structured values + render)', () => {
   });
 
   it('finish gate unit: mounts/unmounts on sync', async () => {
-    const { createFinishGate, workerCanFinishOf, workerGitModeOf, workerRulesOf } = await import('../lib/finish-toggle.js');
+    const { createFinishGate, workerCanFinishOf, workerGitModeOf, commitLanguageOf, messageStyleOf } = await import('../lib/finish-toggle.js');
     assert.equal(workerCanFinishOf(undefined), false);
     assert.equal(workerCanFinishOf({}), false);
     assert.equal(workerCanFinishOf({ workerCanFinish: true }), true);
@@ -545,10 +545,16 @@ describe('tool execute (structured values + render)', () => {
     assert.equal(workerGitModeOf({ workerGitMode: 'in-place-push' }), 'in-place-push');
     assert.equal(workerGitModeOf({ workerGitMode: 'x' }), 'branch-automerge');
     assert.equal(workerGitModeOf({ workerGitMode: true }), 'branch-automerge');
-    assert.equal(workerRulesOf(undefined), '');
-    assert.equal(workerRulesOf({}), '');
-    assert.equal(workerRulesOf({ workerRules: 42 }), '');
-    assert.equal(workerRulesOf({ workerRules: 'alla fine del lavoro aggiorna la wiki' }), 'alla fine del lavoro aggiorna la wiki');
+    assert.equal(commitLanguageOf(undefined), 'English');
+    assert.equal(commitLanguageOf({}), 'English');
+    assert.equal(commitLanguageOf({ commitLanguage: 42 }), 'English');
+    assert.equal(commitLanguageOf({ commitLanguage: '   ' }), 'English');
+    assert.equal(commitLanguageOf({ commitLanguage: 'Italian' }), 'Italian');
+    assert.equal(messageStyleOf(undefined), 'extended');
+    assert.equal(messageStyleOf({}), 'extended');
+    assert.equal(messageStyleOf({ messageStyle: 'minimal' }), 'minimal');
+    assert.equal(messageStyleOf({ messageStyle: 'extended' }), 'extended');
+    assert.equal(messageStyleOf({ messageStyle: 'x' }), 'extended');
     const mounted = [];
     let disposed = 0;
     const fakeDefs = [{ name: 'get_my_task' }, { name: 'finish_task' }];

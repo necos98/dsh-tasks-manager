@@ -37,7 +37,9 @@ describe('web RPC (panel channel)', () => {
     // Manual defaults without a settings ctx.
     assert.equal(out.value.workerCanFinish, false);
     assert.equal(out.value.workerGitMode, 'branch-automerge');
-    assert.equal(out.value.workerRules, '');
+    assert.equal(out.value.commitLanguage, 'English');
+    assert.equal(out.value.messageStyle, 'extended');
+    assert.equal(out.value.workspaceRules, '');
   });
 
   it('snapshot reports the live finish mode from settings', async () => {
@@ -62,14 +64,50 @@ describe('web RPC (panel channel)', () => {
     assert.equal(out.value.workerCanFinish, false);
   });
 
-  it('snapshot reports the live worker rules from settings', async () => {
+  it('snapshot reports the live language/style from settings', async () => {
     const { store } = mockStore();
     const handlers = createWebHandlers(store, {
-      ctx: fakeCtxGet({ workerRules: 'alla fine del lavoro aggiorna la wiki' }),
+      ctx: fakeCtxGet({ commitLanguage: 'Italian', messageStyle: 'minimal' }),
     });
     const out = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
     assert.equal(out.ok, true);
-    assert.equal(out.value.workerRules, 'alla fine del lavoro aggiorna la wiki');
+    assert.equal(out.value.commitLanguage, 'Italian');
+    assert.equal(out.value.messageStyle, 'minimal');
+  });
+
+  it('snapshot carries the workspace rules; set/get round-trips per workspace', async () => {
+    const { h, store, wsA, wsB } = mockStore();
+    const handlers = createWebHandlers(store);
+    const snap0 = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap0.value.workspaceRules, '');
+    const set = await routeWebCall(handlers, 'setWorkspaceRules', { sessionId: 'sess-a', rules: 'alla fine del lavoro aggiorna la wiki' });
+    assert.equal(set.ok, true);
+    assert.equal(set.value.workspaceRules, 'alla fine del lavoro aggiorna la wiki');
+    const snap = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-a' });
+    assert.equal(snap.value.workspaceRules, 'alla fine del lavoro aggiorna la wiki');
+    // Other workspaces read "".
+    const other = await routeWebCall(handlers, 'snapshot', { sessionId: 'sess-b' });
+    assert.equal(other.value.workspaceRules, '');
+    const got = await routeWebCall(handlers, 'getWorkspaceRules', { sessionId: 'sess-a' });
+    assert.equal(got.value.workspaceRules, 'alla fine del lavoro aggiorna la wiki');
+    h.close();
+  });
+
+  it('setWorkspaceRules validates + cross-workspace ids read not-found', async () => {
+    const { h, store, wsA } = mockStore();
+    const handlers = createWebHandlers(store);
+    const row = enqueue(store.getDb(), wsA, { type: 'bug', title: 'Mine', spec: '' });
+    const bad = await routeWebCall(handlers, 'setWorkspaceRules', { sessionId: 'sess-a', rules: 42 });
+    assert.equal(bad.ok, false);
+    assert.equal(bad.error.code, 'bad-rules');
+    const long = await routeWebCall(handlers, 'setWorkspaceRules', { sessionId: 'sess-a', rules: 'x'.repeat(5001) });
+    assert.equal(long.ok, false);
+    assert.equal(long.error.code, 'rules-too-long');
+    // Cross-workspace task ids never resolve as rules targets: ids ride tasks.
+    const cross = await routeWebCall(handlers, 'approve', { sessionId: 'sess-b', id: row.id });
+    assert.equal(cross.ok, false);
+    assert.equal(get(store.getDb(), row.id).state, 'draft');
+    h.close();
   });
 
   it('snapshot is workspace-scoped (sess-b sees nothing of repo-a)', async () => {
