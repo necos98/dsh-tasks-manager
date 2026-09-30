@@ -196,7 +196,13 @@ plugin in the profile and restart `dsh web` to load them.
 
 ## Upgrading
 
-This release requires **DSH ≥ 0.1.7-rc.2**. Older builds registered a settings
+This release requires **DSH 0.2.0-rc.2**. `@deepseek-ai/dsh-system-prompt` and
+`@deepseek-ai/dsh-tools` are pinned to that exact line on purpose: DSH compares
+those declared peers with the version of the **running** runtime and refuses the
+install — or denies the mounted bundle at boot — when they do not cover it, so a
+DSH upgrade has to move these pins with it (`npm run check` enforces the pin).
+The 0.1.7-rc.2 line is where the settings namespace stopped being a name the
+plugin registers: older builds registered a settings
 namespace named `tasks`; the harness now derives it from the entry id, so it is
 **`dsh-tasks-manager`**. There is no migration map for the old key: preferences
 saved by an earlier version under `tasks` (finish toggle, git mode,
@@ -222,7 +228,7 @@ passes unknown keys through, so an old value is harmless but ignored).
 ```
 pnpm install      # the test host resolves the real DSH packages
 npm test          # node --test
-npm run check     # syntax + preset validation
+npm run check     # syntax + DSH peer line + preset validation
 ```
 
 The host is exercised against the real `dsh-settings`/`dsh-tools` services

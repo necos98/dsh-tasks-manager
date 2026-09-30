@@ -3,6 +3,23 @@
 One version covers the whole plugin: the tag `v<version>` names the `package.json` version, and the
 updater in Settings → Tasks offers the newest tag it can read.
 
+## [0.4.1]
+
+DSH 0.2.0-rc.2 compatibility. No runtime behaviour changes.
+
+- **The DSH peer line moves with the runtime.** `@deepseek-ai/dsh-system-prompt` and
+  `@deepseek-ai/dsh-tools` are pinned to `0.2.0-rc.2` (Cordis to `^4.0.4`, the
+  devDependencies with them). DSH 0.2.0 gates an install — and denies a mounted
+  bundle at boot — when a declared peer range does not cover the RUNNING runtime,
+  so `0.4.0` was refused with "requires @deepseek-ai/dsh-system-prompt
+  0.1.7-rc.2, @deepseek-ai/dsh-tools 0.1.7-rc.2". Both packages' `lib/` is
+  byte-identical between the two lines: nothing in `lib/` changed, and the full
+  suite (266 tests) plus `npm run check` pass against the `0.2.0-rc.2` tree.
+- **`scripts/check.mjs` guards the DSH line.** Every `@deepseek-ai/dsh*` peer must
+  be ONE exact version equal to the version installed in `node_modules`, and the
+  installed DSH packages must agree on a single line, so a manifest edited without
+  reinstalling — or a half-upgraded tree — fails the check instead of the install.
+
 ## [0.4.0]
 
 Two new capabilities: worker git modes, and per-workspace project rules with commit language/style.
