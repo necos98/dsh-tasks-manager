@@ -3,6 +3,31 @@
 One version covers the whole plugin: the tag `v<version>` names the `package.json` version, and the
 updater in Settings → Tasks offers the newest tag it can read.
 
+## [0.5.0]
+
+Both taskqueue agents can read the web.
+
+- **`web_search` + `web_fetch` in both presets (#32).** `Task Intake` and
+  `Task Worker` now mount `@deepseek-ai/dsh-tool-web` with the same row id and
+  config the shipped `standard` preset uses (`fetch: true`,
+  `searchTimeoutMs: 60000` — the DeepSeek search route is a full auxiliary
+  model request, so it needs more than the provider-neutral 30s default). Both
+  are read-only network reads: neither mutates a file and `web_fetch` only GETs
+  a public HTTP(S) URL, so the intake's no-write-tools property is unchanged.
+  A new pin asserts the row and that guarantee together.
+- **No dependency was added.** A preset row is a name the loader resolves at
+  mount time (the worker preset already mounts `@deepseek-ai/dsh-tool-fs` this
+  way), and `scripts/check.mjs` requires every declared `@deepseek-ai/dsh*` peer
+  to pin one exact installed version — a stale pin makes the runtime refuse the
+  bundle at boot. The `web` service and its providers are mounted at PROFILE
+  level by `dsh-base` (`dsh-web`, `dsh-web-search-deepseek`,
+  `dsh-web-fetch-http`), so the preset adds only the model-facing tools. With no
+  `DEEPSEEK_API_KEY` the tools stay visible and the call fails with a `WebError`
+  (`WEB_PROVIDER_UNAVAILABLE`) instead of the tools disappearing.
+- **Restart to pick it up.** A bundle's patch layer composes at boot: update the
+  plugin in the profile and restart `dsh web`, then `web_search` and `web_fetch`
+  appear in the tool list of both presets.
+
 ## [0.4.1]
 
 DSH 0.2.0-rc.2 compatibility. No runtime behaviour changes.

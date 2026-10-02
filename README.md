@@ -21,6 +21,9 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   resolves only when no task of that workspace carries the number.
 - The worker reads its task with `get_my_task` (spawn already binds the
   session), works on `task/<seq>-<slug>` (per-workspace visible number) in the user checkout, pushes, reports ready.
+- Both taskqueue agents reach the web: `Task Intake` and `Task Worker` mount
+  `web_search` + `web_fetch` (`@deepseek-ai/dsh-tool-web`) for external docs,
+  upstream issues and changelogs — read-only, so triage stays write-free.
 - Every task carries a notes log the worker writes itself: `note_task(text)`
   appends one timestamped entry to the ACTIVE task bound to the worker's
   session — append-only (earlier entries are never edited), no `id` parameter
@@ -124,8 +127,15 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
   host `fs` service, because `dsh-tool-fs` registers read/write/edit as one
   suite and mounting it would hand triage write+edit. A preset mounts either
   that entry or `dsh-tool-fs`, never both (both register the name `read`).
+  Both presets also mount `@deepseek-ai/dsh-tool-web` (`web_search`,
+  `web_fetch`): read-only network reads (neither tool mutates a file and
+  `web_fetch` only GETs a public HTTP(S) URL), so the intake's no-write-tools
+  property is unchanged. The `web` service and its providers come from the
+  profile plane (`dsh-base` mounts `dsh-web`, `dsh-web-search-deepseek`,
+  `dsh-web-fetch-http`), not from the preset.
 - `presets/taskqueue-worker.patch.yml` — one-task executor (full dev on its
-  branch).
+  branch), with the same `web_search`/`web_fetch` row for external docs,
+  upstream issues and changelogs (profile-plane service, as above).
 - `scripts/validate-presets.mjs` — `npm run validate:presets` (also part of
   `npm run check`) walks the package's own `dsh.bundle.patch` list, parses every
   patch file with the loader's own entry-list dialect and validates each row's

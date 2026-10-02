@@ -26,8 +26,9 @@
           # This file is an AGENT-PLANE composition (see standard preset header for how
           # the roster mounts it). The intake agent is the ANALYST of the pipeline: it
           # talks to the user, deeply inspects the repo read-only (read via the plugin's
-          # own read-tool entry, grep/glob via search, git log via one-shot shell), finds
-          # the root cause, and files task drafts whose specs are directly executable. The
+          # own read-tool entry, grep/glob via search, git log via one-shot shell,
+          # web_search/web_fetch for external docs and upstream issues), finds the root
+          # cause, and files task drafts whose specs are directly executable. The
           # worker is a pure code executor and must never receive analysis work
           # ("investigate X", "figure out why Y").
           # The intake has NO file write/edit tools: no dsh-tool-fs row (read+write+edit
@@ -177,6 +178,27 @@
             name: '@deepseek-ai/dsh-tool-fs-search'
             config:
               sampleOverCapGlobResults: false
+
+          # -- web (read-only network reads: search + fetch) ------------------------------
+          #
+          # `web_search` + `web_fetch` from @deepseek-ai/dsh-tool-web. They are read-only
+          # network reads, so they do NOT weaken the no-write-tools property described
+          # above: neither tool mutates a file, and `web_fetch` only GETs a public
+          # HTTP(S) URL. The `web` service and its providers (dsh-web,
+          # dsh-web-search-deepseek, dsh-web-fetch-http) are mounted at PROFILE level by
+          # dsh-base, not per preset: this row adds only the model-facing tools. Row id
+          # and config mirror the shipped `standard` preset
+          # (dsh-web-app/presets/standard.patch.yml) so both taskqueue agents behave
+          # like the default agent.
+          # Do NOT restate the untrusted-content warning in the persona: the plugin
+          # contributes its own `tool:web_search` / `tool:web_fetch` system-prompt
+          # sections, which render only while the tools are visible in the scope.
+
+          - id: tool-web
+            name: '@deepseek-ai/dsh-tool-web'
+            config:
+              fetch: true
+              searchTimeoutMs: 60000
 
           # -- background jobs: collect-only (no own long work) ------------------------
 

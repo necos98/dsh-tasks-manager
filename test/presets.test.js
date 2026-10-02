@@ -89,6 +89,25 @@ describe('preset declarations (bundle patches)', () => {
     assert.doesNotMatch(text, /name: '[^']*str_replace_editor'/);
   });
 
+  it('both presets mount the web tools, and the intake stays write-free', () => {
+    // Content pin: dsh-tool-web gives web_search + web_fetch to BOTH taskqueue
+    // agents, with the row id and config the shipped `standard` preset uses. The
+    // web row and the no-write-tools guarantee are asserted TOGETHER here: a
+    // web read must never come at the price of a write tool.
+    for (const { id } of PRESETS) {
+      const text = shipped('presets/' + id + '.patch.yml');
+      assert.match(text, /^ {10}- id: tool-web$/m, id + ' mounts no tool-web row');
+      const row = /^ {10}- id: tool-web\n(?: {12}.*\n)+/m.exec(text);
+      assert.ok(row, id + ' tool-web row has no config block');
+      assert.match(row[0], /^ {12}name: '@deepseek-ai\/dsh-tool-web'$/m, id + ' tool-web name');
+      assert.match(row[0], /^ {14}fetch: true$/m, id + ' tool-web fetch');
+      assert.match(row[0], /^ {14}searchTimeoutMs: 60000$/m, id + ' tool-web searchTimeoutMs');
+    }
+    const intake = shipped('presets/taskqueue-intake.patch.yml');
+    assert.doesNotMatch(intake, /name: '@deepseek-ai\/dsh-tool-fs'/);
+    assert.doesNotMatch(intake, /name: '[^']*str_replace_editor'/);
+  });
+
   it('every dsh-tasks-manager/<entry> row resolves to a shipped export', () => {
     // A preset mounts the plugin's scoped entries by subpath; a renamed or
     // dropped export is a mount failure, so bind every row to package.json.
