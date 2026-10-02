@@ -3,6 +3,41 @@
 One version covers the whole plugin: the tag `v<version>` names the `package.json` version, and the
 updater in Settings → Tasks offers the newest tag it can read.
 
+## [0.6.0]
+
+Triage can now run as a read-only research TEAM (#33).
+
+- **New experimental preset `Team Task Intake` (`taskqueue-team-intake`).** It
+  ships as a third bundle declaration (`presets/taskqueue-team-intake.patch.yml`,
+  roster `order: 12`, after `Task Intake` and `Task Worker`) with exactly the
+  same model-facing tool surface as `taskqueue-intake` — the same row ids and
+  config, still no `dsh-tool-fs` and no editor, so the intake stays write-free —
+  and with the persona rewritten: the Team Lead decomposes the question into 2-5
+  independent research axes (mechanism / root cause, performance, security,
+  maintainability, existing approaches and trade-offs), delegates one axis per
+  teammate, then consolidates the answers into the usual one-draft-per-change
+  specs. A diff between the two preset files reads as "same surface, different
+  orchestration".
+- **It declares NO delegation row, on purpose.** The Agent Teams tools
+  (`spawn_teammate`, `send_message`, `list_agents`, `wait_agent`, `team_task_*`,
+  …) are HOST-plane: `@deepseek-ai/dsh-experimental-tool-agent-team` installs
+  them into every team member's own scope on agent creation, so a preset could
+  not declare them even if it wanted to, and `tools.restrict()` could never mask
+  them. Teammates inherit the lead's preset whole, which is what makes them
+  read-only for free — a new pin in `test/presets.test.js` asserts the read-only
+  surface, the absence of every delegation row and the dual-role persona (the
+  same text tells a teammate what it is and that it must never call
+  `enqueue_task`).
+- **It needs one profile bundle, and degrades without it.** The preset requires
+  `@deepseek-ai/dsh-experimental-agent-team-profile` in the profile bundle list;
+  without it no team tool is visible and the persona's fallback rule makes the
+  lead run the same triage solo. It is the third entry in the package's own
+  `dsh.bundle.patch` list, which is what makes `scripts/validate-presets.mjs`
+  (part of `npm run check`) validate its nested `config.plugins` offline.
+- **Restart to pick it up.** The roster is composed at boot: update the plugin
+  in the profile (Settings → Tasks) and restart `dsh web`, then `Team Task
+  Intake` appears in the preset list.
+
 ## [0.5.0]
 
 Both taskqueue agents can read the web.
