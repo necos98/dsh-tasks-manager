@@ -21,9 +21,10 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   resolves only when no task of that workspace carries the number.
 - The worker reads its task with `get_my_task` (spawn already binds the
   session), works on `task/<seq>-<slug>` (per-workspace visible number) in the user checkout, pushes, reports ready.
-- Both taskqueue agents reach the web: `Task Intake` and `Task Worker` mount
-  `web_search` + `web_fetch` (`@deepseek-ai/dsh-tool-web`) for external docs,
-  upstream issues and changelogs — read-only, so triage stays write-free.
+- Every taskqueue preset reaches the web: `Task Intake`, `Task Worker` and
+  `Team Task Intake` mount `web_search` + `web_fetch`
+  (`@deepseek-ai/dsh-tool-web`) for external docs, upstream issues and
+  changelogs — read-only, so triage stays write-free.
 - Every task carries a notes log the worker writes itself: `note_task(text)`
   appends one timestamped entry to the ACTIVE task bound to the worker's
   session — append-only (earlier entries are never edited), no `id` parameter
@@ -127,7 +128,7 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
   host `fs` service, because `dsh-tool-fs` registers read/write/edit as one
   suite and mounting it would hand triage write+edit. A preset mounts either
   that entry or `dsh-tool-fs`, never both (both register the name `read`).
-  Both presets also mount `@deepseek-ai/dsh-tool-web` (`web_search`,
+  Every preset also mounts `@deepseek-ai/dsh-tool-web` (`web_search`,
   `web_fetch`): read-only network reads (neither tool mutates a file and
   `web_fetch` only GETs a public HTTP(S) URL), so the intake's no-write-tools
   property is unchanged. The `web` service and its providers come from the
@@ -136,6 +137,23 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
 - `presets/taskqueue-worker.patch.yml` — one-task executor (full dev on its
   branch), with the same `web_search`/`web_fetch` row for external docs,
   upstream issues and changelogs (profile-plane service, as above).
+- `presets/taskqueue-team-intake.patch.yml` — **experimental** `Team Task
+  Intake`: the same read-only surface as `taskqueue-intake` (same rows, same
+  config, `order: 12`), with the persona rewritten so the triage chat runs as a
+  research TEAM — the Team Lead owns the analysis, decomposes it into 2-5
+  independent axes, delegates each to a teammate and consolidates the answers
+  before filing the usual one-draft-per-change specs.
+  It declares **no delegation row**: the Agent Teams tools
+  (`spawn_teammate`, `send_message`, `list_agents`, `interrupt_agent`,
+  `wait_agent`, `team_task_*`) are HOST-plane —
+  `@deepseek-ai/dsh-experimental-tool-agent-team` installs them into every team
+  member's own scope on agent creation, so a preset could neither declare nor
+  filter them. Teammates inherit the lead's preset whole, which is what makes
+  them read-only for free.
+  Requires `@deepseek-ai/dsh-experimental-agent-team-profile` in the profile
+  bundle list; without it no team tool is visible and the persona's fallback
+  rule makes the lead run the same triage solo, so the preset degrades instead
+  of stalling.
 - `scripts/validate-presets.mjs` — `npm run validate:presets` (also part of
   `npm run check`) walks the package's own `dsh.bundle.patch` list, parses every
   patch file with the loader's own entry-list dialect and validates each row's
@@ -190,12 +208,14 @@ Since **DSH 0.1.7-rc.2** a preset IS an `@deepseek-ai/dsh-agent-preset`
 declaration carried by a bundle patch, and the harness reads declarations only:
 the legacy `$DSH_HOME/.agent-presets/<id>/` root (a directory holding
 `preset.yml` + `agent.cordis.yml`, which this plugin used to copy there at
-startup) **is read by nothing any more**. This package therefore ships its two
-presets as `presets/taskqueue-intake.patch.yml` and
-`presets/taskqueue-worker.patch.yml`, listed in its own `dsh.bundle.patch`, so
-the loader inserts the `preset-taskqueue-intake` / `preset-taskqueue-worker`
-rows while it composes the profile. The plugin source is still the single
-authority — nothing is copied onto disk at boot.
+startup) **is read by nothing any more**. This package therefore ships its
+presets as `presets/taskqueue-intake.patch.yml`,
+`presets/taskqueue-worker.patch.yml` and
+`presets/taskqueue-team-intake.patch.yml`, listed in its own
+`dsh.bundle.patch`, so the loader inserts the `preset-taskqueue-intake` /
+`preset-taskqueue-worker` / `preset-taskqueue-team-intake` rows while it
+composes the profile. The plugin source is still the single authority — nothing
+is copied onto disk at boot.
 
 The declarations need the harness's `agentPresets` service, which the shipped
 Web profile mounts (`@deepseek-ai/dsh-web-app` inserts `agent-preset-registry`
@@ -226,7 +246,7 @@ project rules): saved `workerRules` values are **not** migrated and every
 workspace starts from empty rules. Old databases migrate to schema v7 with
 `rules=''` and keep working.
 
-Since **0.3.1** the two presets are shipped as bundle declarations instead of
+Since **0.3.1** the presets are shipped as bundle declarations instead of
 being copied into `$DSH_HOME/.agent-presets` (see "How the presets are
 published"). Delete the stale `$DSH_HOME/.agent-presets/taskqueue-*`
 directories once — nothing reads them — and drop a leftover `syncPresets:` key

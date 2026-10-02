@@ -38,14 +38,16 @@ function presetPatchFiles() {
 const PRESETS = [
   { id: 'taskqueue-intake', name: 'Task Intake', order: 10 },
   { id: 'taskqueue-worker', name: 'Task Worker', order: 11 },
+  { id: 'taskqueue-team-intake', name: 'Team Task Intake', order: 12 },
 ];
 
 describe('preset declarations (bundle patches)', () => {
-  it('the bundle patch list carries the plugin row first, then both presets', () => {
+  it('the bundle patch list carries the plugin row first, then every shipped preset', () => {
     assert.deepEqual(patchList(), [
       './cordis.patch.yml',
       './presets/taskqueue-intake.patch.yml',
       './presets/taskqueue-worker.patch.yml',
+      './presets/taskqueue-team-intake.patch.yml',
     ]);
   });
 
@@ -89,7 +91,7 @@ describe('preset declarations (bundle patches)', () => {
     assert.doesNotMatch(text, /name: '[^']*str_replace_editor'/);
   });
 
-  it('both presets mount the web tools, and the intake stays write-free', () => {
+  it('every preset mounts the web tools, and the intake stays write-free', () => {
     // Content pin: dsh-tool-web gives web_search + web_fetch to BOTH taskqueue
     // agents, with the row id and config the shipped `standard` preset uses. The
     // web row and the no-write-tools guarantee are asserted TOGETHER here: a
@@ -106,6 +108,49 @@ describe('preset declarations (bundle patches)', () => {
     const intake = shipped('presets/taskqueue-intake.patch.yml');
     assert.doesNotMatch(intake, /name: '@deepseek-ai\/dsh-tool-fs'/);
     assert.doesNotMatch(intake, /name: '[^']*str_replace_editor'/);
+  });
+
+  it('the team intake preset is the read-only intake surface orchestrated as a team', () => {
+    // The experimental preset reuses the intake surface verbatim and delegates
+    // instead. Two properties make it safe: (1) it stays write-free, so a
+    // teammate that inherits this preset cannot mutate anything, and (2) it
+    // declares NO delegation row — the Agent Teams tools are host-plane and
+    // land in each agent's own scope on agent/created, so mounting one here
+    // would be a wrong mount rather than a delegation policy.
+    const text = shipped('presets/taskqueue-team-intake.patch.yml');
+    assert.match(text, /name: 'dsh-tasks-manager\/read-tool'/);
+    assert.match(text, /name: 'dsh-tasks-manager\/intake-tools'/);
+    assert.doesNotMatch(text, /name: '@deepseek-ai\/dsh-tool-fs'/);
+    assert.doesNotMatch(text, /name: '[^']*str_replace_editor'/);
+    // No delegation ROW. The plain form of the team-tool pin is anchored to a
+    // `name:` row on purpose: the declaration NAMES that package in its header
+    // prose (explaining why it is host-plane), so an unanchored doesNotMatch
+    // would forbid documenting the very design this preset relies on.
+    assert.doesNotMatch(text, /@deepseek-ai\/dsh-tool-subagent/);
+    assert.doesNotMatch(text, /@deepseek-ai\/dsh-tool-workflow/);
+    assert.doesNotMatch(text, /@deepseek-ai\/dsh-tool-ralph/);
+    assert.doesNotMatch(text, /^\s*name: ['"]@deepseek-ai\/dsh-experimental-tool-agent-team['"]$/m);
+    // The persona must serve BOTH roles: teammates inherit the lead's preset, so
+    // the same text is the only thing telling a teammate what it is and what it
+    // may never do. Drop any of these pins and the team silently degrades into
+    // teammates that answer the user or file drafts of their own.
+    for (const needle of [
+      'Team Lead',
+      'teammate',
+      'spawn_teammate',
+      'send_message',
+      'list_agents',
+      'wait_agent',
+      'team_task_create',
+      'team_task_update',
+      'Never call enqueue_task',
+      'does not apply here',
+      'enqueue_task',
+      'edit_draft',
+      'search_tasks',
+    ]) {
+      assert.ok(text.includes(needle), 'persona dropped: ' + needle);
+    }
   });
 
   it('every dsh-tasks-manager/<entry> row resolves to a shipped export', () => {
