@@ -5,6 +5,8 @@ updater in Settings → Tasks offers the newest tag it can read.
 
 ## [Unreleased]
 
+## [0.7.0]
+
 A task filed by the Team Task Intake preset is now implemented by a TEAM (#36).
 
 - **The queue records WHO filed a draft, and the spawn routes on it.** Schema
