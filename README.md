@@ -154,6 +154,29 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
   bundle list; without it no team tool is visible and the persona's fallback
   rule makes the lead run the same triage solo, so the preset degrades instead
   of stalling.
+- `presets/taskqueue-team-worker.patch.yml` — **experimental** `Team Task
+  Worker`: the same full executor surface as `taskqueue-worker` (every row after
+  the persona is byte-identical to it, `order: 13`), with the persona rewritten so
+  ONE task is implemented by a small TEAM instead of one long context — the Team
+  Lead decomposes the task into independent parts, spawns one teammate per part
+  and consolidates, while the Lead keeps the entire git choreography and the
+  whole queue conversation.
+  This preset is the write-capable half of the experimental pair, so unlike
+  `taskqueue-team-intake` a teammate here is a FULL writer (it composes from the
+  parent's preset generation and the Team roster passes no `toolFilter`). The
+  persona therefore carries the three ownership rules — **git is the Lead's
+  alone** (one shared checkout, git bypasses the filesystem version guard, write
+  scopes are advisory), **disjoint write scopes** (the Lead assigns file
+  prefixes per teammate and records them on `team_task_create`), and **queue
+  tools are the Lead's alone** (`get_my_task`/`note_task`/`finish_task` are bound
+  to the Lead's session, so each spawn prompt embeds the spec and the assigned
+  file scope verbatim) — plus the non-interactive escalation rule: a blocked
+  teammate reports to the Lead with `send_message` and stops, it never asks the
+  user and never guesses. Budget: at most 4 teammates, and a task whose parts must
+  share a file stays with the Lead.
+  It declares **no delegation row** either (same host-plane reason as above) and
+  needs `@deepseek-ai/dsh-experimental-agent-team-profile`; without it the Lead
+  runs the whole task solo.
 - `scripts/validate-presets.mjs` — `npm run validate:presets` (also part of
   `npm run check`) walks the package's own `dsh.bundle.patch` list, parses every
   patch file with the loader's own entry-list dialect and validates each row's
@@ -210,10 +233,12 @@ the legacy `$DSH_HOME/.agent-presets/<id>/` root (a directory holding
 `preset.yml` + `agent.cordis.yml`, which this plugin used to copy there at
 startup) **is read by nothing any more**. This package therefore ships its
 presets as `presets/taskqueue-intake.patch.yml`,
-`presets/taskqueue-worker.patch.yml` and
-`presets/taskqueue-team-intake.patch.yml`, listed in its own
+`presets/taskqueue-worker.patch.yml`,
+`presets/taskqueue-team-intake.patch.yml` and
+`presets/taskqueue-team-worker.patch.yml`, listed in its own
 `dsh.bundle.patch`, so the loader inserts the `preset-taskqueue-intake` /
-`preset-taskqueue-worker` / `preset-taskqueue-team-intake` rows while it
+`preset-taskqueue-worker` / `preset-taskqueue-team-intake` /
+`preset-taskqueue-team-worker` rows while it
 composes the profile. The plugin source is still the single authority — nothing
 is copied onto disk at boot.
 

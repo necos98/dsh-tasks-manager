@@ -3,6 +3,49 @@
 One version covers the whole plugin: the tag `v<version>` names the `package.json` version, and the
 updater in Settings → Tasks offers the newest tag it can read.
 
+## [Unreleased]
+
+A task can now be implemented by a small TEAM instead of one long context (#35).
+
+- **New experimental preset `Team Task Worker` (`taskqueue-team-worker`).** It
+  ships as a fourth bundle declaration (`presets/taskqueue-team-worker.patch.yml`,
+  roster `order: 13`) that is a byte-for-byte copy of
+  `presets/taskqueue-worker.patch.yml` after the persona — same row ids, same
+  config, same full dev surface (`dsh-tool-fs` read+write+edit, shell, web,
+  skills, todos) — with the persona rewritten so the ONE task is delegated to a
+  small team: the Team Lead decomposes it into independent parts, spawns one
+  teammate per part, consolidates, and keeps the entire git choreography itself.
+  A diff between the two files reads as "same surface, different orchestration",
+  and a new pin asserts exactly that: every row after the persona must stay
+  byte-identical to the worker preset's.
+- **It is the write-capable half of the experimental pair, so the persona IS the
+  safety story.** A teammate composes from the parent's preset generation and
+  the Team roster passes no `toolFilter`, so unlike `taskqueue-team-intake` —
+  where every member is read-only for free because the preset mounts no fs
+  suite — here every member is a full writer in ONE shared checkout. Three
+  ownership rules make that survivable and are all pinned: **git is the Lead's
+  alone** (no teammate runs checkout/branch/add/commit/stash/push/PR/merge:
+  git bypasses the filesystem version guard and write scopes are advisory, not a
+  lock), **disjoint write scopes** (the Lead assigns file prefixes per teammate at
+  spawn time and records them with `team_task_create(write_scopes)`; a task whose
+  parts must share a file stays with the Lead), and **queue tools are the Lead's
+  alone** (`get_my_task`/`note_task`/`finish_task` are bound to the Lead's session,
+  so each spawn prompt embeds the spec, the acceptance criteria and the assigned
+  file scope verbatim). A blocked teammate reports to the Lead with
+  `send_message` and stops — `ask_user_question` throws `DELEGATED_CALLER` for it
+  and its approval policy is pinned to `never`. Budget: at most 4 teammates per
+  task, and delegation is skipped entirely when the decomposition is not
+  genuinely independent.
+- **It declares NO delegation row, on purpose**, exactly like the team intake
+  preset: the Agent Teams tools are HOST-plane and land in each agent's own
+  scope on agent creation, so a preset could neither declare nor filter them.
+  It needs the same
+  `@deepseek-ai/dsh-experimental-agent-team-profile` bundle; without it no team
+  tool is visible and the persona's degradation rule makes the Lead run the whole
+  task solo. It is the fourth entry in the package's own `dsh.bundle.patch`
+  list, which is what makes `scripts/validate-presets.mjs` (part of
+  `npm run check`) validate its rows offline.
+
 ## [0.6.0]
 
 Triage can now run as a read-only research TEAM (#33).
