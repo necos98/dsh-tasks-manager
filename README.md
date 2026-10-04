@@ -60,7 +60,9 @@ Stupid-synchronous task queue for DSH: one active task per repo, FIFO promotion,
   ` (task #<seq>)` message suffix. `in-place-push` is the same plus one
   plain trailing `git push` of the current branch after a green suite (push
   rejected → stop, report, wait). The spawn message tells the worker its
-  mode (`Git mode for this task is <mode>`), its language (`Commit/PR
+  mode (`Git mode for this task is <mode>`), whether it runs as a team
+  (`Team mode for this task is ON|OFF.`, from the preset the task's origin
+  routes to), its language (`Commit/PR
   language: <lang>`, from the `tasks.commitLanguage` setting, default
   `"English"`) and its verbosity (`Message style is minimal|extended…`,
   from `tasks.messageStyle`, default `"extended"`); the worker preset follows
@@ -161,6 +163,14 @@ See `design-tasks-simple.md` for the full design (Italian, historical).
   Lead decomposes the task into independent parts, spawns one teammate per part
   and consolidates, while the Lead keeps the entire git choreography and the
   whole queue conversation.
+  It is chosen automatically: `enqueue_task` stamps every draft with the agent
+  preset of the session that filed it (`tasks.origin_preset`), and a promotion
+  mounts the Team Task Worker when that origin is `taskqueue-team-intake` and the
+  single `taskqueue-worker` for everything else (including every row that
+  predates the column). The worker's first message carries the same decision as
+  one authoritative line beside the git-mode line — `Team mode for this task is
+  ON.` / `OFF.` — read from the same predicate, so a chat never claims a mode its
+  surface cannot run.
   This preset is the write-capable half of the experimental pair, so unlike
   `taskqueue-team-intake` a teammate here is a FULL writer (it composes from the
   parent's preset generation and the Team roster passes no `toolFilter`). The
@@ -270,6 +280,15 @@ The old global `workerRules` setting is removed (replaced by per-workspace
 project rules): saved `workerRules` values are **not** migrated and every
 workspace starts from empty rules. Old databases migrate to schema v7 with
 `rules=''` and keep working.
+
+Schema v8 adds `tasks.origin_preset`, the agent preset a draft was filed from
+(`enqueue_task` reads the calling session's header), and the promotion mounts
+the Team Task Worker for a task whose origin is `taskqueue-team-intake`. The
+column is `NOT NULL DEFAULT ''`, so old databases migrate in place with **no
+data to move**: every existing row reads `''` and keeps running on the single
+`taskqueue-worker`, exactly as before. Only the column and the user_version
+stamp change — `seq`, `slug`, `spec`, `branch`, `notes` and `worker_session`
+are untouched.
 
 Since **0.3.1** the presets are shipped as bundle declarations instead of
 being copied into `$DSH_HOME/.agent-presets` (see "How the presets are
