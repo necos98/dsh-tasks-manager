@@ -5,7 +5,28 @@ updater in Settings → Tasks offers the newest tag it can read.
 
 ## [Unreleased]
 
-A task can now be implemented by a small TEAM instead of one long context (#35).
+A task filed by the Team Task Intake preset is now implemented by a TEAM (#36).
+
+- **The queue records WHO filed a draft, and the spawn routes on it.** Schema
+  v8 adds `tasks.origin_preset`: `enqueue_task` stamps every draft with the
+  agent preset of the calling session (`exec.agent.session.header.agentPreset`,
+  read defensively — a session with no preset simply stores `''`), and
+  `editDraft` never touches it, so a draft keeps the origin it was filed with.
+  On promotion `spawnWorker` picks the executor from that origin: a task filed
+  by `taskqueue-team-intake` mounts the new `taskqueue-team-worker` preset,
+  everything else keeps the single `taskqueue-worker`. The wanted id is chosen
+  BEFORE the roster resolve, so the resolve — and its bare-id fallback — apply
+  to the routed preset rather than to a hardcoded one.
+- **The worker is told, in one authoritative line.** Beside the git-mode line
+  the spawn message now carries `Team mode for this task is ON.` / `OFF.`,
+  computed from the same predicate that mounts the preset, so a chat can never
+  be told to delegate on a surface without the team tools. Apart from that one
+  line a non-team prompt is byte-identical to before.
+- **Nothing migrates.** The column is `NOT NULL DEFAULT ''`, so every existing
+  row reads "no known origin" and keeps spawning the single worker: `seq`,
+  `slug`, `spec`, `branch`, `notes` and `worker_session` are untouched and only
+  `PRAGMA user_version` moves from 7 to 8.
+- A task can now be implemented by a small TEAM instead of one long context (#35).
 
 - **New experimental preset `Team Task Worker` (`taskqueue-team-worker`).** It
   ships as a fourth bundle declaration (`presets/taskqueue-team-worker.patch.yml`,

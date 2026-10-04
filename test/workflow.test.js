@@ -219,6 +219,43 @@ describe('workflow on the real host', () => {
     }
   });
 
+  it('a team-filed draft promotes into a team worker chat on the real host', async () => {
+    // The full chain, through the REAL plugin: a session whose header names
+    // the Team Task Intake preset files the draft -> the row keeps that origin
+    // -> approve promotes it -> the spawn mounts the Team Task Worker. The
+    // plain intake chat on the same host still opens the solo worker.
+    const rt = await bootHost({ agents: true });
+    // Read it the way lib/spawn.js does.
+    const agents = rt.ctx.get('agents');
+    try {
+      const teamFiled = await callTool(rt.ctx, 'sess-a', 'enqueue_task', { type: 'feature', title: 'Team filed' }, 'taskqueue-team-intake');
+      assert.equal(teamFiled.value.origin_preset, 'taskqueue-team-intake');
+      const soloFiled = await callTool(rt.ctx, 'sess-a', 'enqueue_task', { type: 'feature', title: 'Solo filed' }, 'taskqueue-intake');
+      assert.equal(soloFiled.value.origin_preset, 'taskqueue-intake');
+
+      // Approve the team-filed draft: it takes the slot and its chat opens.
+      const approved = await callTool(rt.ctx, 'sess-a', 'approve_task', { id: teamFiled.value.id });
+      assert.equal(approved.value.task.state, 'active');
+      assert.ok(approved.value.spawn.sessionId, 'the promoted task opened a chat');
+      assert.equal(agents.lastPreset(), 'taskqueue-team-worker');
+      // The chat it opened is bound to the task and told the truth about it.
+      const detail = await callTool(rt.ctx, 'sess-a', 'task_detail', { id: teamFiled.value.id });
+      assert.equal(detail.value.worker_session, approved.value.spawn.sessionId);
+      const prompt = agents.prompts[0].content.map((b) => b.text).join('\n');
+      assert.match(prompt, /Team mode for this task is ON\./);
+
+      // The solo draft waits behind it, and opens the solo worker when the
+      // slot frees.
+      await callTool(rt.ctx, 'sess-a', 'approve_task', { id: soloFiled.value.id });
+      await callTool(rt.ctx, 'sess-a', 'close_task', { id: teamFiled.value.id, outcome: 'done' });
+      assert.equal(agents.lastPreset(), 'taskqueue-worker');
+      const soloPrompt = agents.prompts[1].content.map((b) => b.text).join('\n');
+      assert.match(soloPrompt, /Team mode for this task is OFF\./);
+    } finally {
+      await rt.dispose();
+    }
+  });
+
   it('invalid args fail through the real defineTool validation', async () => {
     await assert.rejects(
       () => callTool(host.ctx, 'sess-a', 'enqueue_task', { type: 'nope', title: 'X' }),
