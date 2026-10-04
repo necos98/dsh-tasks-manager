@@ -31,7 +31,8 @@
         "./cordis.patch.yml",
         "./presets/taskqueue-intake.patch.yml",
         "./presets/taskqueue-worker.patch.yml",
-        "./presets/taskqueue-team-intake.patch.yml"
+        "./presets/taskqueue-team-intake.patch.yml",
+        "./presets/taskqueue-team-worker.patch.yml"
       ]
     },
     "client": {

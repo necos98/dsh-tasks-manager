@@ -35,10 +35,23 @@ function presetPatchFiles() {
   return readdirSync(join(root, 'presets')).filter((f) => f.endsWith('.patch.yml'));
 }
 
+/**
+ * Everything a declaration mounts AFTER its persona: agent-instructions and
+ * the whole tool row list. Two presets with the same model-facing surface
+ * share this text byte for byte.
+ */
+function rowsAfterPersona(rel) {
+  const text = shipped(rel);
+  const cut = text.indexOf('              prefix: >-');
+  assert.notEqual(cut, -1, rel + ' has no persona prefix');
+  return text.slice(text.indexOf('- id: agent-instructions', cut));
+}
+
 const PRESETS = [
   { id: 'taskqueue-intake', name: 'Task Intake', order: 10 },
   { id: 'taskqueue-worker', name: 'Task Worker', order: 11 },
   { id: 'taskqueue-team-intake', name: 'Team Task Intake', order: 12 },
+  { id: 'taskqueue-team-worker', name: 'Team Task Worker', order: 13 },
 ];
 
 describe('preset declarations (bundle patches)', () => {
@@ -48,6 +61,7 @@ describe('preset declarations (bundle patches)', () => {
       './presets/taskqueue-intake.patch.yml',
       './presets/taskqueue-worker.patch.yml',
       './presets/taskqueue-team-intake.patch.yml',
+      './presets/taskqueue-team-worker.patch.yml',
     ]);
   });
 
@@ -151,6 +165,56 @@ describe('preset declarations (bundle patches)', () => {
     ]) {
       assert.ok(text.includes(needle), 'persona dropped: ' + needle);
     }
+  });
+
+  it('the team worker preset is the worker surface with the orchestration rewritten', () => {
+    // Unlike the team INTAKE preset, whose members are read-only for free
+    // because the preset mounts no fs suite, a teammate of this preset is a
+    // FULL writer: it composes from the parent's preset generation and the Team
+    // roster passes no toolFilter. The safety therefore lives entirely in the
+    // persona, so every ownership rule below is a content pin — drop one and the
+    // team silently degrades into teammates that commit, push or file queue
+    // state of their own.
+    const text = shipped('presets/taskqueue-team-worker.patch.yml');
+    // (1) Same surface: every row after the persona is byte-identical to the
+    // worker preset, which is what makes the diff read as "same surface,
+    // different orchestration". Only the persona may differ.
+    assert.equal(
+      rowsAfterPersona('presets/taskqueue-team-worker.patch.yml'),
+      rowsAfterPersona('presets/taskqueue-worker.patch.yml'),
+    );
+    // (2) NO delegation ROW: the Agent Teams tools are host-plane and land in
+    // each agent's own scope on agent/created, so mounting one here would be a
+    // wrong mount rather than a delegation policy. Anchored to a `name:` row on
+    // purpose — the declaration NAMES those packages in its header prose.
+    assert.doesNotMatch(text, /@deepseek-ai\/dsh-tool-subagent/);
+    assert.doesNotMatch(text, /@deepseek-ai\/dsh-tool-workflow/);
+    assert.doesNotMatch(text, /@deepseek-ai\/dsh-tool-ralph/);
+    assert.doesNotMatch(text, /^\s*name: ['"]@deepseek-ai\/dsh-experimental-tool-agent-team['"]$/m);
+    // (3) The three ownership rules, the non-interactive escalation rule and the
+    // role split served to BOTH roles (teammates inherit the preset whole).
+    for (const needle of [
+      '## Git is the Lead',
+      '## Disjoint write scopes',
+      '## Queue tools are the Lead',
+      '## No escalation from a teammate',
+      '## Team mode line discipline',
+      'Team Lead',
+      'You are teammate',
+      'send_message',
+      'team_task_create(write_scopes)',
+      'DELEGATED_CALLER',
+      'at most 4 teammates',
+    ]) {
+      assert.ok(text.includes(needle), 'persona dropped: ' + needle);
+    }
+    // (4) The git choreography must not diverge from the solo worker: the three
+    // mode sections and the auto-merge conflict discipline are copied verbatim.
+    assert.match(text, /## Branch-automerge mode \(ONLY when spawn says git mode is branch-automerge\)/);
+    assert.match(text, /## In-place-local mode \(ONLY when spawn says git mode is in-place-local\)/);
+    assert.match(text, /## In-place-push mode \(ONLY when spawn says git mode is in-place-push\)/);
+    assert.match(text, /git merge --no-ff <branch>/);
+    assert.match(text, /FORBIDDEN to unblock yourself/);
   });
 
   it('every dsh-tasks-manager/<entry> row resolves to a shipped export', () => {
