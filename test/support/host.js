@@ -11,6 +11,7 @@ import { CommandRuntime } from "@deepseek-ai/dsh-commands";
 import SystemPrompt from "@deepseek-ai/dsh-system-prompt";
 import * as plugin from "../../lib/index.js";
 import { FakeRegistry } from "./fake-registry.js";
+import { FakeAgents } from "./fake-agents.js";
 import { MemorySettings } from "./memory-settings.js";
 import { SETTINGS_KEYS, resolveConfig } from "../../lib/config.js";
 
@@ -20,7 +21,7 @@ function settingsDefaults(config) {
   return Object.fromEntries(SETTINGS_KEYS.map((key) => [key, resolved[key]]));
 }
 
-export async function bootHost({ config = {}, workspaces, pluginOverride } = {}) {
+export async function bootHost({ config = {}, workspaces, pluginOverride, agents = false } = {}) {
   const underTest = pluginOverride ?? plugin;
   const dshHome = mkdtempSync(join(tmpdir(), "dsh-tasks-it-"));
   const resolvedRowConfig = {
@@ -37,10 +38,15 @@ export async function bootHost({ config = {}, workspaces, pluginOverride } = {})
   await ctx.plugin(CommandRuntime, {});
   await ctx.plugin(MemorySettings, { settingsDefaults: settingsDefaults(resolvedRowConfig) });
   const registry = await ctx.plugin(FakeRegistry, workspaces === undefined ? {} : { workspaces });
+  // Opt-in: the real host has no agents service, so the spawn fails closed and
+  // the tests can assert that. Pass { agents: true } to open the worker chat
+  // for real (against FakeAgents) instead.
+  const agentsService = agents ? await ctx.plugin(FakeAgents, {}) : null;
   await ctx.plugin(underTest, resolvedRowConfig);
   return {
     ctx,
     registry,
+    agents: agentsService,
     dshHome,
     async dispose() {
       await ctx.fiber.dispose();

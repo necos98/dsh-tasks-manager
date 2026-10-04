@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 import { openMemory } from '../lib/db.js';
 import { approve, close, enqueue, ensureWorkspace } from '../lib/queue.js';
 import { makeToolDefinitions } from '../lib/tools.js';
@@ -638,6 +639,83 @@ describe('queue ownership + clash (FIX-07/FIX-12)', () => {
     h.db.prepare("UPDATE tasks SET branch = ?, state = ? WHERE id = ?").run('task/' + b.seq + '-same-name', 'done', a.id);
     const r = approve(h.db, b.id);
     assert.ok(r.promoted.branch.endsWith('-2'), 'expected -2 suffix, got ' + r.promoted.branch);
+    h.close();
+  });
+});
+
+// tasks.origin_preset: enqueue_task stamps the draft with the agent preset of
+// the session that filed it, and the spawn picks the executor from that stamp.
+describe('draft origin preset', () => {
+  // Same session id as execA (same workspace), plus the preset the header names.
+  const execTeam = { agent: { session: { header: { id: 'sess-a', agentPreset: 'taskqueue-team-intake' } } } };
+  const execIntake = { agent: { session: { header: { id: 'sess-a', agentPreset: 'taskqueue-intake' } } } };
+
+  it('enqueue_task stores the calling session header agentPreset', async () => {
+    const { h, store } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const filed = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Team filed' }, execTeam);
+    assert.equal(filed.origin_preset, 'taskqueue-team-intake');
+    const plain = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Intake filed' }, execIntake);
+    assert.equal(plain.origin_preset, 'taskqueue-intake');
+    // The stamp is durable, not decoration on the returned value.
+    const { get } = await import('../lib/queue.js');
+    assert.equal(get(h.db, filed.id).origin_preset, 'taskqueue-team-intake');
+    h.close();
+  });
+
+  it('a session with no readable preset still files a draft (empty origin)', async () => {
+    const { h, store } = mockStore();
+    const defs = makeToolDefinitions(store);
+    // sessionPresetOf must never throw: a draft filed from a chat whose header
+    // carries no (or a non-string) preset still works, it just routes to the
+    // single worker later.
+    const noPreset = { agent: { session: { header: { id: 'sess-a' } } } };
+    const badPreset = { agent: { session: { header: { id: 'sess-a', agentPreset: 42 } } } };
+    const emptyPreset = { agent: { session: { header: { id: 'sess-a', agentPreset: '' } } } };
+    for (const exec of [execA, noPreset, badPreset, emptyPreset]) {
+      const v = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'No preset' }, exec);
+      assert.equal(v.origin_preset, '');
+    }
+    // Reading the preset changes nothing else: a call with no session at all
+    // still fails the way it did before, as no-session (not as a crash).
+    await assert.rejects(
+      () => byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'No session' }, { agent: { session: {} } }),
+      /no session id/,
+    );
+    h.close();
+  });
+
+  it('every row-returning tool still validates with origin_preset present', async () => {
+    // TASK_SCHEMA is additionalProperties:false and SHARED by all ten tools:
+    // a column the schema does not declare fails validation for EVERY tool,
+    // not just the one that reads it. Run the real validator over a real row.
+    const { h, store } = mockStore();
+    const defs = makeToolDefinitions(store);
+    const filed = await byName(defs, 'enqueue_task').execute({ type: 'bug', title: 'Team filed', spec: 'x' }, execTeam);
+    await byName(defs, 'approve_task').execute({ id: filed.id }, execA);
+    const bound = { agent: { session: { header: { id: 'sess-worker' } } } };
+    store.workspaceRegistry.list = () => [
+      { id: 'a', path: 'C:/repo-a', sessionIds: ['sess-a', 'sess-worker'] },
+      { id: 'b', path: 'C:/repo-b', sessionIds: ['sess-b'] },
+    ];
+    const mine = await byName(defs, 'get_my_task').execute({}, bound);
+    const values = {
+      enqueue_task: filed,
+      get_my_task: mine,
+      list_tasks: await byName(defs, 'list_tasks').execute({}, execA),
+      search_tasks: await byName(defs, 'search_tasks').execute({ query: 'Team' }, execA),
+      task_detail: await byName(defs, 'task_detail').execute({ id: filed.id }, execA),
+    };
+    for (const [name, value] of Object.entries(values)) {
+      const schema = byName(defs, name).output.schema;
+      assert.deepEqual(
+        validateJsonSchemaValue(schema, value, name),
+        [],
+        name + ' output must validate the row carrying origin_preset',
+      );
+    }
+    // And the value the spawn routes on survives to the worker-facing read.
+    assert.equal(mine.origin_preset, 'taskqueue-team-intake');
     h.close();
   });
 });

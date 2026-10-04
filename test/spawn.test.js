@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { modesOfCtx, spawnForPromotion, spawnWorker, workerPrompt } from '../lib/spawn.js';
+import { isTeamTask, modesOfCtx, spawnForPromotion, spawnWorker, TEAM_INTAKE_PRESET, TEAM_WORKER_PRESET, WORKER_PRESET, workerPrompt } from '../lib/spawn.js';
 import { bindSession, enqueue, ensureWorkspace, get } from '../lib/queue.js';
 import { openMemory } from '../lib/db.js';
 import { fakeModesCtx, fakeSettings } from './support/fake-settings.js';
@@ -399,5 +399,144 @@ describe('spawn identified prompt', () => {
     assert.equal(get(h.db, row.id).worker_session, out.sessionId);
     void bindSession;
     h.close();
+  });
+});
+
+// Which executor a promotion mounts: the task's origin (tasks.origin_preset)
+// decides it, and the SAME predicate writes the prompt's team-mode line.
+// This suite had NO coverage of the preset path before (every mock ctx returns
+// undefined for agentPresets), so the roster resolve AND the roster-missing
+// fallback are pinned here.
+describe('team preset routing', () => {
+  // A ctx that records the create meta, the setup mount and the prompt, with
+  // an optional agentPresets roster.
+  function routingCtx({ presets } = {}) {
+    const seen = { created: null, mounted: [], resolved: [], followup: null };
+    return {
+      seen,
+      ctx: {
+        get(key) {
+          if (key === 'agents') {
+            return {
+              create: async (args) => {
+                seen.created = args;
+                return {
+                  agent: {
+                    session: { id: args.sessionId },
+                    followup: (msg) => { seen.followup = msg; },
+                  },
+                };
+              },
+            };
+          }
+          if (key === 'workspaceRegistry') return { get: () => undefined };
+          if (key === 'agentPresets') return presets;
+          return undefined;
+        },
+      },
+    };
+  }
+
+  // An active task carrying `origin` (undefined = a row without the column).
+  function activeTask(origin) {
+    const h = openMemory();
+    const ws = ensureWorkspace(h.db, 'C:/repo-a');
+    const row = enqueue(h.db, ws, { type: 'bug', title: 'Routed', spec: '' });
+    h.db.prepare('UPDATE tasks SET state = ?, branch = ? WHERE id = ?').run('active', 'task/1-routed', row.id);
+    const task = get(h.db, row.id);
+    if (origin !== undefined) h.db.prepare('UPDATE tasks SET origin_preset = ? WHERE id = ?').run(origin, row.id);
+    return { h, task: get(h.db, row.id) };
+  }
+
+  it('a task filed by the team intake mounts the team worker preset', async () => {
+    const { h, task } = activeTask(TEAM_INTAKE_PRESET);
+    const { ctx, seen } = routingCtx();
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task });
+    assert.equal(seen.created.meta.agentPreset, TEAM_WORKER_PRESET);
+    h.close();
+  });
+
+  it('every other origin keeps the single worker preset', async () => {
+    // '' is what a pre-v8 row migrates to; the plain intake preset and an
+    // unknown id are the "not our business" cases: they must not route to a team.
+    for (const origin of [undefined, '', 'taskqueue-intake', 'some-other-preset', TEAM_WORKER_PRESET]) {
+      const { h, task } = activeTask(origin);
+      const { ctx, seen } = routingCtx();
+      await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task });
+      assert.equal(seen.created.meta.agentPreset, WORKER_PRESET, 'origin ' + JSON.stringify(origin));
+      h.close();
+    }
+  });
+
+  it('the roster resolves the WANTED id, and mount follows the resolved one', async () => {
+    const { h, task } = activeTask(TEAM_INTAKE_PRESET);
+    const { ctx, seen } = routingCtx({
+      presets: {
+        resolve: async (id) => {
+          seen.resolved.push(id);
+          return { id: 'roster:' + id };
+        },
+        mount: async (_agentCtx, id) => { seen.mounted.push(id); },
+      },
+    });
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task });
+    // The resolve applies to the routed id, not to a hardcoded worker id.
+    assert.deepEqual(seen.resolved, [TEAM_WORKER_PRESET]);
+    assert.equal(seen.created.meta.agentPreset, 'roster:' + TEAM_WORKER_PRESET);
+    // setup mounts exactly what the header records.
+    await seen.created.setup({});
+    assert.deepEqual(seen.mounted, ['roster:' + TEAM_WORKER_PRESET]);
+    h.close();
+  });
+
+  it('a roster that cannot resolve falls back to the bare wanted id (never the other preset)', async () => {
+    // No resolve at all, a roster that throws, and a roster with no mount:
+    // each must still mount the id the task routed to.
+    const cases = [
+      { name: 'no resolve', presets: { mount: async () => {} } },
+      { name: 'resolve throws', presets: { resolve: async () => { throw new Error('roster down'); }, mount: async () => {} } },
+      { name: 'no mount', presets: { resolve: async (id) => ({ id }) } },
+    ];
+    for (const { name, presets } of cases) {
+      const { h, task } = activeTask(TEAM_INTAKE_PRESET);
+      const { ctx, seen } = routingCtx({ presets });
+      await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task });
+      assert.equal(seen.created.meta.agentPreset, TEAM_WORKER_PRESET, name);
+      h.close();
+    }
+  });
+
+  it('isTeamTask is the single predicate behind both surfaces', () => {
+    assert.equal(isTeamTask({ origin_preset: TEAM_INTAKE_PRESET }), true);
+    assert.equal(isTeamTask({ origin_preset: 'taskqueue-intake' }), false);
+    assert.equal(isTeamTask({ origin_preset: '' }), false);
+    assert.equal(isTeamTask({}), false);
+    assert.equal(isTeamTask(undefined), false);
+  });
+
+  it('the prompt states team mode from the same predicate, beside the git mode', async () => {
+    const { h, task } = activeTask(TEAM_INTAKE_PRESET);
+    const { ctx, seen } = routingCtx();
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task });
+    const text = seen.followup.content.map((b) => b.text).join('\n');
+    assert.match(text, /Git mode for this task is branch-automerge\.\nTeam mode for this task is ON\.\nCommit\/PR language: English\./);
+    // The other authoritative lines are untouched.
+    assert.match(text, /Message style is extended/);
+    assert.match(text, /Self-finish is OFF/);
+    h.close();
+  });
+
+  it('a solo task reads team mode OFF, and the rest of the prompt is unchanged', async () => {
+    const { h, task } = activeTask('');
+    const { ctx, seen } = routingCtx();
+    await spawnWorker({ ctx, db: h.db, workspace: { id: 'a', path: 'C:/repo-a' }, task });
+    const text = seen.followup.content.map((b) => b.text).join('\n');
+    assert.match(text, /Git mode for this task is branch-automerge\.\nTeam mode for this task is OFF\.\nCommit\/PR language: English\./);
+    h.close();
+    // One line apart: everything else is exactly today's prompt.
+    const solo = workerPrompt({ id: 7, title: 'Fix login', branch: 'task/7-fix-login', slug: 'fix-login' });
+    const withoutLine = solo.split('\n').filter((line) => !line.startsWith('Team mode for this task is')).join('\n');
+    assert.equal(withoutLine.split('\n').length, solo.split('\n').length - 1);
+    assert.doesNotMatch(withoutLine, /Team mode/);
   });
 });

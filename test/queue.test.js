@@ -658,9 +658,9 @@ describe('requeue (active -> queued)', () => {
 describe('per-project queue pause', () => {
   const codeOf = (fn) => { try { fn(); } catch (e) { return e.code; } return 'no-throw'; };
 
-  it('fresh databases are v7 with the queue enabled', () => {
+  it('fresh databases are v8 with the queue enabled', () => {
     const { h, ws } = fresh();
-    assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+    assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
     assert.equal(h.db.prepare("SELECT queue_enabled AS q FROM workspaces WHERE id = ?").get(ws).q, 1);
     h.close();
   });
@@ -834,7 +834,7 @@ describe('per-workspace numbering', () => {
     h.close();
   });
 
-  it('v2 databases migrate to v7 with deterministic seq backfill, ids untouched', async () => {
+  it('v2 databases migrate to v8 with deterministic seq backfill, ids untouched', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -857,7 +857,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: the v2->v3->v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
         const rows = h.db.prepare("SELECT id, workspace_id, seq, notes FROM tasks ORDER BY id ASC").all();
         assert.deepEqual(rows.map((r) => [r.id, r.workspace_id, r.seq]), [[1, 1, 1], [2, 2, 1], [3, 1, 2]]);
         // v6 backfills the notes log of every pre-existing row with ''.
@@ -877,7 +877,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v1 databases migrate to v7 (column rename + seq backfill + queued_at + notes + rules)', async () => {
+  it('v1 databases migrate to v8 (column rename + seq backfill + queued_at + notes + rules + origin_preset)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -898,7 +898,7 @@ describe('per-workspace numbering', () => {
       raw.close();
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
         const row = get(h.db, 1);
         assert.equal(row.type, 'bug');
         assert.equal(row.title, 'Vecchio');
@@ -915,7 +915,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v3 databases migrate to v7 in place (queued_at added, rows NULL)', async () => {
+  it('v3 databases migrate to v8 in place (queued_at added, rows NULL)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -938,7 +938,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: the v3->v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
         const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
         assert.ok(cols.some((c) => c.name === 'queued_at'), 'queued_at column exists');
         assert.ok(cols.some((c) => c.name === 'notes'), 'notes column exists');
@@ -955,7 +955,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v4 databases migrate to v7 in place (queue_enabled backfilled to 1)', async () => {
+  it('v4 databases migrate to v8 in place (queue_enabled backfilled to 1)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -978,7 +978,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: the v4->v5->v6 migration runs in place.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
         const cols = h.db.prepare("PRAGMA table_info(workspaces)").all();
         assert.ok(cols.some((c) => c.name === 'queue_enabled'), 'queue_enabled column exists');
         // Every pre-existing workspace keeps the automatic behavior.
@@ -997,7 +997,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v5 databases migrate to v7 in place (notes column backfilled with empty logs)', async () => {
+  it('v5 databases migrate to v8 in place (notes column backfilled with empty logs)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -1020,7 +1020,7 @@ describe('per-workspace numbering', () => {
       // Reopen through the plugin: only the v5->v6 step runs.
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
         const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
         assert.ok(cols.some((c) => c.name === 'notes'), 'notes column exists');
         // Every pre-existing row reads as "no notes" (NOT NULL DEFAULT '').
@@ -1045,7 +1045,7 @@ describe('per-workspace numbering', () => {
     }
   });
 
-  it('v6 databases migrate to v7 in place (rules column backfilled empty)', async () => {
+  it('v6 databases migrate to v8 in place (rules column backfilled empty)', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
@@ -1066,10 +1066,57 @@ describe('per-workspace numbering', () => {
       raw.close();
       const h = openDatabase({ path });
       try {
-        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 7);
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
         const cols = h.db.prepare("PRAGMA table_info(workspaces)").all();
         assert.ok(cols.some((c) => c.name === 'rules'), 'rules column exists');
         assert.equal(getWorkspaceRules(h.db, 1), '');
+      } finally {
+        h.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('v7 databases migrate to v8 in place (origin_preset backfilled empty, task untouched)', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { DatabaseSync } = await import('node:sqlite');
+    const { openDatabase } = await import('../lib/db.js');
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tasks-v7-'));
+    const path = join(dir, 'tasks.db');
+    try {
+      // Faithful v7 layout: rules present, no origin_preset column.
+      const raw = new DatabaseSync(path);
+      raw.exec("PRAGMA application_id = 2003397999");
+      raw.exec("CREATE TABLE workspaces (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, base_branch TEXT NOT NULL DEFAULT '', queue_enabled INTEGER NOT NULL DEFAULT 1, rules TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)");
+      raw.exec("CREATE TABLE tasks (id INTEGER PRIMARY KEY, workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, slug TEXT NOT NULL, spec TEXT NOT NULL DEFAULT '', branch TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'draft', worker_session TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, closed_at TEXT, close_reason TEXT, queued_at TEXT, notes TEXT NOT NULL DEFAULT '')");
+      raw.exec("CREATE INDEX idx_tasks_ws_state ON tasks(workspace_id, state)");
+      raw.exec("CREATE UNIQUE INDEX idx_tasks_ws_seq ON tasks(workspace_id, seq)");
+      raw.exec("INSERT INTO workspaces (id, path, base_branch, queue_enabled, rules, created_at, updated_at) VALUES (1, 'C:/a', '', 1, 'no force push', 't', 't')");
+      raw.exec("INSERT INTO tasks (id, workspace_id, seq, type, title, slug, spec, branch, state, worker_session, created_at, updated_at, queued_at, notes) VALUES (1, 1, 1, 'bug', 'Old row', 'old-row', 'keep me', 'task/1-old-row', 'active', 'session-old', 't', 't', '2026-02-02T00:00:00.000Z', '- [t] earlier finding')");
+      raw.exec("PRAGMA user_version = 7");
+      raw.close();
+      const h = openDatabase({ path });
+      try {
+        assert.equal(h.db.prepare("PRAGMA user_version").get().user_version, 8);
+        const cols = h.db.prepare("PRAGMA table_info(tasks)").all();
+        assert.ok(cols.some((c) => c.name === 'origin_preset'), 'origin_preset column exists');
+        // Every pre-existing row reads as "no known origin" (NOT NULL DEFAULT '').
+        const row = get(h.db, 1);
+        assert.equal(row.origin_preset, '');
+        // Nothing else moves: seq, slug, spec, branch, notes, worker_session.
+        assert.equal(row.seq, 1);
+        assert.equal(row.slug, 'old-row');
+        assert.equal(row.spec, 'keep me');
+        assert.equal(row.branch, 'task/1-old-row');
+        assert.equal(row.notes, '- [t] earlier finding');
+        assert.equal(row.worker_session, 'session-old');
+        assert.equal(row.queued_at, '2026-02-02T00:00:00.000Z');
+        assert.equal(getWorkspaceRules(h.db, 1), 'no force push');
+        // A migrated row takes a new origin like any other.
+        assert.equal(enqueue(h.db, 1, { type: 'bug', title: 'New', originPreset: 'taskqueue-team-intake' }).origin_preset, 'taskqueue-team-intake');
       } finally {
         h.close();
       }
@@ -1100,6 +1147,40 @@ describe('workspace rules', () => {
     assert.throws(() => setWorkspaceRules(h.db, ws, 42), /rules must be a string/);
     assert.throws(() => setWorkspaceRules(h.db, ws, 'x'.repeat(RULES_MAX_CHARS + 1)), /at most/);
     assert.equal(getWorkspaceRules(h.db, 9999), '');
+    h.close();
+  });
+});
+
+// tasks.origin_preset: WHICH session filed the draft. It is provenance, not
+// a routing input the queue interprets — spawnWorker reads it — so enqueue
+// only stores it, and anything that is not a string becomes "no known origin".
+describe('draft origin preset', () => {
+  it('round-trips the filing preset through get', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Team filed', originPreset: 'taskqueue-team-intake' });
+    assert.equal(a.origin_preset, 'taskqueue-team-intake');
+    assert.equal(get(h.db, a.id).origin_preset, 'taskqueue-team-intake');
+    // Unknown preset ids are stored verbatim: the column is provenance, the
+    // spawn alone decides what they route to.
+    const b = enqueue(h.db, ws, { type: 'bug', title: 'Other filed', originPreset: 'taskqueue-intake' });
+    assert.equal(get(h.db, b.id).origin_preset, 'taskqueue-intake');
+    h.close();
+  });
+
+  it('absent or non-string originPreset stores the empty string', () => {
+    const { h, ws } = fresh();
+    assert.equal(enqueue(h.db, ws, { type: 'bug', title: 'No origin' }).origin_preset, '');
+    assert.equal(enqueue(h.db, ws, { type: 'bug', title: 'Number origin', originPreset: 42 }).origin_preset, '');
+    assert.equal(enqueue(h.db, ws, { type: 'bug', title: 'Null origin', originPreset: null }).origin_preset, '');
+    assert.equal(enqueue(h.db, ws, { type: 'bug', title: 'Object origin', originPreset: { id: 'x' } }).origin_preset, '');
+    h.close();
+  });
+
+  it('editDraft keeps the origin the draft was filed with', () => {
+    const { h, ws } = fresh();
+    const a = enqueue(h.db, ws, { type: 'bug', title: 'Filed by intake', originPreset: 'taskqueue-team-intake' });
+    const edited = editDraft(h.db, a.id, { title: 'Filed by intake, renamed', spec: 'new' });
+    assert.equal(edited.origin_preset, 'taskqueue-team-intake');
     h.close();
   });
 });
