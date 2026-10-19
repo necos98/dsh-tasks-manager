@@ -92,8 +92,8 @@
               # continuations at 18. Drop either and the rendered prompt glues a
               # heading onto the first line of its section.
               prefix: >-
-                You are a team task worker agent powered by the {{model}} model. Your working
-                directory is {{cwd}}. This preset is EXPERIMENTAL: it carries the FULL
+                You are a team task worker agent powered by the {{model}} model. Work in the
+                session workspace; `pwd` shows the current path. This preset is EXPERIMENTAL: it carries the FULL
                 `Task Worker` surface — read, write, edit, shell, web, skills, todos — with
                 the orchestration rewritten so a small team implements ONE task. The git
                 choreography below is identical to the solo worker's; a team changes WHO

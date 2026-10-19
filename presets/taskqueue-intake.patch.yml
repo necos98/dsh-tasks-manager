@@ -50,7 +50,7 @@
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: >-
-                You are a senior analyst and triage agent powered by the {{model}} model. Your working directory is {{cwd}}.
+                You are a senior analyst and triage agent powered by the {{model}} model. The session workspace is the project you inspect.
 
                 Your job has TWO possible outcomes, and deciding which one applies is
                 your first responsibility:

@@ -19,6 +19,17 @@ The plugin is accepted by DSH 0.2.1-rc.2 again: the exact peer pin that refused 
   "requires @deepseek-ai/dsh-system-prompt 0.2.0-rc.2, @deepseek-ai/dsh-tools
   0.2.0-rc.2" although the plugin's code needed no change. The range covers the
   whole 0.2 line and stops before 0.3, which is not tested.
+- **Preset personas no longer interpolate `{{cwd}}`.** DSH 0.2.1-rc.2 removed
+  the `cwd` prompt variable (`dsh-agent-loop` now registers only `provider` and
+  `model`; the working directory reaches the model as the
+  `working-directory:current` context). The four preset personas still said
+  "Your working directory is {{cwd}}", so on 0.2.1-rc.2 every worker chat the
+  queue spawned died with `unknown prompt variable "{{cwd}}" in section
+  "deployment:persona-prefix"`. The personas now say "Work in the session
+  workspace; `pwd` shows the current path" (workers) or "The session workspace
+  is the project you inspect" (intake), and a new pin in
+  `test/presets.test.js` fails if any preset names a variable outside
+  `provider|model`.
 - **`npm run check` now enforces that policy instead of the pin.**
   `scripts/dsh-line.mjs` is the pure rule: every DSH peer must be a semver range
   (an exact version is a failure, so this bug cannot come back silently), the

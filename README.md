@@ -269,6 +269,10 @@ boot — when they do not cover it. An exact pin is therefore a refusal on every
 DSH release: 0.7.0 pinned 0.2.0-rc.2 and was refused on 0.2.1-rc.2 even though
 the code was unchanged. `npm run check` enforces that each peer is a range
 covering the installed line; the 0.3 line is not claimed until it is tested.
+0.7.1 also fixes the preset personas: they interpolated `{{cwd}}`, a prompt
+variable DSH 0.2.1 removed (the working directory now reaches the model as the
+`working-directory:current` context), so every worker chat spawned on 0.2.1
+died during prompt assembly.
 The 0.1.7-rc.2 line is where the settings namespace stopped being a name the
 plugin registers: older builds registered a settings
 namespace named `tasks`; the harness now derives it from the entry id, so it is

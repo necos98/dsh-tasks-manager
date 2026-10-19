@@ -87,6 +87,23 @@ describe('preset declarations (bundle patches)', () => {
     }
   });
 
+  it('every persona interpolates only prompt variables the harness registers', () => {
+    // DSH interpolates {{name}} while assembling a prompt section and REFUSES the
+    // whole assembly when no plugin registered that name (dsh-system-prompt,
+    // interpolate()). 0.2.1-rc.2 removed the `cwd` variable dsh-agent-loop used to
+    // register: the working directory now reaches the model as the
+    // `working-directory:current` context, and a persona that still says {{cwd}}
+    // kills every chat the queue spawns with "unknown prompt variable". So the
+    // presets may only name the variables the loop still provides.
+    const REGISTERED = new Set(['provider', 'model']);
+    for (const { id } of PRESETS) {
+      const text = shipped('presets/' + id + '.patch.yml');
+      for (const match of text.matchAll(/\{\{([a-z][a-z0-9_]*)\}\}/g)) {
+        assert.ok(REGISTERED.has(match[1]), id + ' uses unregistered prompt variable {{' + match[1] + '}}');
+      }
+    }
+  });
+
   it('the worker preset the spawner mounts is a shipped declaration', () => {
     // lib/spawn.js resolves and mounts WORKER_PRESET by id: the declaration's
     // config.id must be that exact string or every promotion fails to mount.
